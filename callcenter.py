@@ -1,13 +1,35 @@
 from datetime import datetime
 import json
+import os
 import sqlite3
+import subprocess
+import sys
+
+# --- AUTO-INSTALLAZIONE AUTOMATICA LIBRERIE AL PRIMO AVVIO ---
+REQUIRED_PACKAGES = ["streamlit", "pandas", "openpyxl", "numpy"]
+
+
+def install_missing_packages():
+  for package in REQUIRED_PACKAGES:
+    try:
+      __import__(package)
+    except ImportError:
+      print(
+          f"Libreria mancante rilevata: '{package}'. Installazione in corso..."
+      )
+      subprocess.check_call(
+          [sys.executable, "-m", "pip", "install", package]
+      )
+
+
+install_missing_packages()
+
 import numpy as np
 import pandas as pd
 import streamlit as st
-import time
 
 st.set_page_config(
-    page_title="Hera Call Center - Multi-Postazione",
+    page_title="Call Center - Multi-Agenzia",
     page_icon="📞",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -20,30 +42,26 @@ st.markdown(
     .main-title { font-size: 26px; font-weight: 800; color: #003366; margin-bottom: 2px; }
     .sub-title { font-size: 14px; color: #555555; margin-bottom: 15px; }
     .card-box { background-color: #f8f9fa; border-radius: 12px; padding: 22px; border-left: 8px solid #0056b3; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.06); }
+    .setup-box { background-color: #e0f2fe; border-radius: 12px; padding: 25px; border-left: 8px solid #0284c7; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.08); }
     .warning-box { background-color: #f8d7da; border-radius: 10px; padding: 15px; border-left: 8px solid #dc3545; color: #721c24; margin-bottom: 15px; font-weight: bold; }
     
-    /* POP-UP GIALLO PRIVACY NO */
-    .privacy-alert-popup { background-color: #fff3cd; border: 2px solid #ffecb5; border-radius: 10px; padding: 15px; color: #664d03; margin-bottom: 15px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); text-align: center; animation: pulse 1s infinite; }
+    .privacy-alert-popup { background-color: #fff3cd; border: 2px solid #ffecb5; border-radius: 10px; padding: 15px; color: #664d03; margin-bottom: 15px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); text-align: center; }
     
     .phone-highlight { font-size: 34px !important; font-weight: 900 !important; color: #d9534f !important; letter-spacing: 1.5px; margin: 10px 0; }
     .name-highlight { font-size: 28px !important; font-weight: 800 !important; color: #1b1e21 !important; }
     .status-badge-ok { background-color: #d4edda; color: #155724; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
     .status-badge-warn { background-color: #fff3cd; color: #856404; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
     
-    /* PRIVACY IN EVIDENZA */
     .privacy-yes { background-color: #d4edda; color: #155724; padding: 6px 12px; border-radius: 6px; font-weight: 900; font-size: 18px; display: inline-block; }
     .privacy-no { background-color: #f8d7da; color: #721c24; padding: 6px 12px; border-radius: 6px; font-weight: 900; font-size: 18px; display: inline-block; }
 
     .stButton>button { width: 100%; height: 52px; font-size: 16px; font-weight: bold; border-radius: 8px; }
     
-    /* STILE WIDGET OBIETTIVI / ENERGIA */
     .energy-container { background: white; border-radius: 10px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; border: 1px solid #e2e8f0; }
     .energy-title { font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 6px; display: flex; justify-content: space-between; }
     .progress-bar-bg { background-color: #e2e8f0; border-radius: 20px; height: 18px; width: 100%; overflow: hidden; }
     .progress-bar-fill-calls { background: linear-gradient(90deg, #3b82f6, #0056b3); height: 100%; border-radius: 20px; }
     .progress-bar-fill-apps { background: linear-gradient(90deg, #f59e0b, #10b981); height: 100%; border-radius: 20px; }
-    
-    .comuni-counter-box { background: #f1f5f9; border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 12px; border-left: 4px solid #3b82f6; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -69,6 +87,15 @@ def init_db():
             operatore TEXT DEFAULT '',
             sede_appuntamento TEXT DEFAULT '',
             note TEXT DEFAULT ''
+        )
+    """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS utenti (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password TEXT,
+            ruolo TEXT,
+            postazione TEXT
         )
     """)
   conn.commit()
@@ -160,32 +187,6 @@ def pulisci_telefono(tel):
   return t_str
 
 
-def estrai_comune(indirizzo):
-  if pd.isna(indirizzo) or not indirizzo:
-    return "ALTRO"
-  ind_str = str(indirizzo).upper()
-  # Tenta di estrarre parole chiave tipiche o la citta'
-  # Esempio: VIA ROMA 12, SPILIMBERGO PN -> SPILIMBERGO
-  parti = [p.strip() for p in ind_str.replace(",", " ").split() if len(p) > 2]
-  comuni_noti = [
-      "SPILIMBERGO",
-      "SAN MARTINO",
-      "CODROIPO",
-      "PORDENONE",
-      "ZOPPOLA",
-      "CASARSA",
-      "SAN VITO",
-      "MANIAGO",
-  ]
-  for c in comuni_noti:
-    if c in ind_str:
-      return c
-  # Se contiene un CAP a 5 cifre, prendiamo la parola subito dopo o prima
-  return (
-      parti[-2] if len(parti) >= 2 else "GENERICO"
-  )  # Fallback di raggruppamento
-
-
 if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
 if "username" not in st.session_state:
@@ -193,59 +194,141 @@ if "username" not in st.session_state:
 if "role" not in st.session_state:
   st.session_state.role = ""
 if "postazione" not in st.session_state:
-  st.session_state.postazione = "Spilimbergo"
+  st.session_state.postazione = ""
+if "force_setup" not in st.session_state:
+  st.session_state.force_setup = False
 
-# 1. LOGIN SEMPLIFICATO
-if not st.session_state.logged_in:
+# CONTROLLO UTENTI IN DATABASE
+conn = sqlite3.connect(DB_NAME)
+cursor = conn.cursor()
+cursor.execute("SELECT username FROM utenti")
+utenti_esistenti = [row[0] for row in cursor.fetchall()]
+conn.close()
+
+# SE NON CI SONO UTENTI O SI FORZA LA NUOVA INSTALLAZIONE
+if len(utenti_esistenti) == 0 or st.session_state.force_setup:
   st.markdown(
-      "<h2 style='text-align: center; color: #003366;'>📞 Accesso Call Center"
-      " Hera</h2>",
+      "<h1 style='text-align: center; color: #0284c7;'>⚙️ Inizializzazione Nuova"
+      " Agenzia</h1>",
       unsafe_allow_html=True,
   )
+  st.markdown(
+      "<p style='text-align: center;'>Configura l'Account Master Amministratore"
+      " per iniziare ad usare la tua piattaforma.</p>",
+      unsafe_allow_html=True,
+  )
+
   col1, col2, col3 = st.columns([1, 2, 1])
   with col2:
-    st.markdown('<div class="card-box">', unsafe_allow_html=True)
-    postazione_sel = st.selectbox(
-        "📍 Seleziona Postazione di Lavoro",
-        ["Spilimbergo", "San Martino", "Codroipo", "Pordenone"],
+    st.markdown('<div class="setup-box">', unsafe_allow_html=True)
+    st.subheader("🔑 Crea il tuo Account Master")
+
+    setup_user = st.text_input(
+        "Username Amministratore / Titolare",
+        value="",
+        placeholder="es. Mario Rossi",
     )
-    login_pass = st.text_input(
-        "🔑 Inserisci Password Operatore / Master", type="password"
+    setup_pass = st.text_input(
+        "Password Master Segreta", type="password", placeholder="Scegli password"
+    )
+    setup_postazione = st.text_input(
+        "Nome Sede Principale", value="Sede Principale"
     )
 
-    if st.button("🚀 Accedi"):
-      mappa_password = {
-          "hera2026": ("Master", "ADMIN"),
-          "Napolitano": ("Maddalena Napolitano", "OPERATORE"),
-          "Speranza": ("Lisetta Speranza", "OPERATORE"),
-          "Frighetto": ("Daniele Frighetto", "OPERATORE"),
-      }
+    if st.button("🚀 Attiva Agenzia e Crea Master"):
+      if setup_user.strip() and setup_pass.strip():
+        try:
+          conn = sqlite3.connect(DB_NAME)
+          cursor = conn.cursor()
+          cursor.execute(
+              """
+                        INSERT INTO utenti (username, password, ruolo, postazione)
+                        VALUES (?, ?, ?, ?)
+                    """,
+              (
+                  setup_user.strip(),
+                  setup_pass.strip(),
+                  "ADMIN",
+                  setup_postazione.strip(),
+              ),
+          )
+          conn.commit()
+          conn.close()
 
-      if login_pass in mappa_password:
-        utente, ruolo = mappa_password[login_pass]
-        st.session_state.logged_in = True
-        st.session_state.username = utente
-        st.session_state.role = ruolo
-        st.session_state.postazione = (
-            postazione_sel if ruolo == "OPERATORE" else "MASTER"
-        )
-        st.rerun()
+          st.session_state.force_setup = False
+          st.success(
+              "✅ Account Master creato con successo! Ora puoi accedere."
+          )
+          st.rerun()
+        except sqlite3.IntegrityError:
+          st.error("❌ Questo Username è già presente. Scegline un altro.")
+        except Exception as e:
+          st.error(f"Errore: {e}")
       else:
-        st.error("❌ Password non valida. Riprova.")
+        st.warning("⚠️ Compila sia Username che Password.")
+
+    if len(utenti_esistenti) > 0:
+      st.markdown("---")
+      if st.button("🔙 Torna al Login"):
+        st.session_state.force_setup = False
+        st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
   st.stop()
 
-# --- BARRA LATERALE (Utente + Contatore residuo per Comune + Utility) ---
+# LOGIN NORMALE
+if not st.session_state.logged_in:
+  st.markdown(
+      "<h2 style='text-align: center; color: #003366;'>📞 Accesso Call Center"
+      " Agenzia</h2>",
+      unsafe_allow_html=True,
+  )
+
+  col1, col2, col3 = st.columns([1, 2, 1])
+  with col2:
+    st.markdown('<div class="card-box">', unsafe_allow_html=True)
+
+    selected_user = st.selectbox("👤 Seleziona Utente", utenti_esistenti)
+    login_pass = st.text_input("🔑 Inserisci Password", type="password")
+
+    if st.button("🚀 Accedi"):
+      conn = sqlite3.connect(DB_NAME)
+      cursor = conn.cursor()
+      cursor.execute(
+          "SELECT ruolo, postazione FROM utenti WHERE username = ? AND"
+          " password = ?",
+          (selected_user, login_pass),
+      )
+      res = cursor.fetchone()
+      conn.close()
+
+      if res:
+        st.session_state.logged_in = True
+        st.session_state.username = selected_user
+        st.session_state.role = res[0]
+        st.session_state.postazione = res[1]
+        st.rerun()
+      else:
+        st.error("❌ Password non corretta.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.expander("🆕 Prima volta qui? Configura una Nuova Agenzia"):
+      if st.button("⚙️ Avvia Configurazione Iniziale"):
+        st.session_state.force_setup = True
+        st.rerun()
+
+  st.stop()
+
+# --- BARRA LATERALE ---
 st.sidebar.title(f"👤 {st.session_state.username}")
 st.sidebar.markdown(f"**Ruolo:** {st.session_state.role}")
 st.sidebar.markdown(f"**Postazione:** {st.session_state.postazione}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 Da Chiamare per Comune")
-
 df_full_check = get_all_shared_dataframe()
 if not df_full_check.empty:
-  # Calcola quanti clienti non hanno ancora esito per comune
   comuni_list = []
   for _, r in df_full_check.iterrows():
     try:
@@ -253,7 +336,6 @@ if not df_full_check.empty:
     except:
       d = {}
     ind = str(d.get("Indirizzo residenza", ""))
-    # Estrazione Comune pulita
     comune_trovato = "ALTRO"
     for c_key in [
         "SPILIMBERGO",
@@ -264,66 +346,23 @@ if not df_full_check.empty:
         "CASARSA",
         "SAN VITO",
         "MANIAGO",
-        "AVIANO",
-        "VALVASONE",
     ]:
       if c_key in ind.upper():
         comune_trovato = c_key
         break
-    comuni_list.append({
-        "comune": comune_trovato,
-        "esito": r["esito"],
-    })
+    comuni_list.append({"comune": comune_trovato, "esito": r["esito"]})
 
   df_c_stat = pd.DataFrame(comuni_list)
-  # Filtra solo quelli da chiamare (esito vuoto)
   df_da_chiamare = df_c_stat[
       (df_c_stat["esito"] == "") | (df_c_stat["esito"].isna())
   ]
-
   if not df_da_chiamare.empty:
-    counts = df_da_chiamare["comune"].value_counts()
-    for com, num in counts.items():
+    for com, num in df_da_chiamare["comune"].value_counts().items():
       st.sidebar.markdown(
           f"📍 **{com}**: <span style='color: #d9534f; font-weight: bold;'>{num}"
           " da chiamare</span>",
           unsafe_allow_html=True,
       )
-  else:
-    st.sidebar.info("Tutti i contatti sono stati chiamati!")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛠️ Utility Operatore")
-with st.sidebar.expander("🕒 Orologio & Data"):
-  st.write(f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y')}")
-  st.write(f"⏰ **Ora:** {datetime.now().strftime('%H:%M:%S')}")
-
-with st.sidebar.expander("🧮 Calcolatrice"):
-  c_num1 = st.number_input("Numero 1", value=0.0, key="calc_n1")
-  c_op = st.selectbox("Operazione", ["+", "-", "×", "÷"], key="calc_op")
-  c_num2 = st.number_input("Numero 2", value=0.0, key="calc_n2")
-  c_res = (
-      c_num1 + c_num2
-      if c_op == "+"
-      else (
-          c_num1 - c_num2
-          if c_op == "-"
-          else (
-              c_num1 * c_num2
-              if c_op == "×"
-              else (c_num1 / c_num2 if c_num2 != 0 else "Errore")
-          )
-      )
-  )
-  st.info(f"Risultato: **{c_res}**")
-
-with st.sidebar.expander("🆔 Verifica Codice Fiscale"):
-  cf_check = st.text_input("Inserisci CF da verificare", "").upper().strip()
-  if cf_check:
-    if len(cf_check) == 16:
-      st.success("✅ Lunghezza corretta (16 caratteri).")
-    else:
-      st.warning(f"⚠️ Lunghezza errata: {len(cf_check)} caratteri (su 16).")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Esci / Logout"):
@@ -333,13 +372,55 @@ if st.sidebar.button("🚪 Esci / Logout"):
 # 2. MASTER ACCOUNT
 if st.session_state.role == "ADMIN":
   st.markdown(
-      '<div class="main-title">🛠️ Master Account - Gestione e'
-      " Statistiche</div>",
+      '<div class="main-title">🛠️ Master Account - Amministrazione</div>',
       unsafe_allow_html=True,
   )
 
+  with st.expander("👥 Gestione Collaboratori & Password", expanded=False):
+    st.markdown(
+        "Crea liberamente i profili degli operatori e assegna username e"
+        " password a tua scelta."
+    )
+    col_u1, col_u2, col_u3, col_u4 = st.columns(4)
+    with col_u1:
+      new_username = st.text_input("Nome Operatore / Username")
+    with col_u2:
+      new_password = st.text_input("Password Operatore", type="password")
+    with col_u3:
+      new_ruolo = st.selectbox("Ruolo Account", ["OPERATORE", "ADMIN"])
+    with col_u4:
+      new_postazione = st.text_input("Sede / Postazione", value="Sede 1")
+
+    if st.button("💾 Registra Operatore"):
+      if new_username and new_password:
+        try:
+          conn = sqlite3.connect(DB_NAME)
+          cursor = conn.cursor()
+          cursor.execute(
+              """
+                        INSERT INTO utenti (username, password, ruolo, postazione)
+                        VALUES (?, ?, ?, ?)
+                    """,
+              (
+                  new_username.strip(),
+                  new_password.strip(),
+                  new_ruolo,
+                  new_postazione.strip(),
+              ),
+          )
+          conn.commit()
+          conn.close()
+          st.success(
+              f"✅ Operatore **{new_username}** registrato con successo!"
+          )
+          st.rerun()
+        except sqlite3.IntegrityError:
+          st.error("❌ Questo Username è già esistente.")
+      else:
+        st.warning("⚠️ Compila tutti i campi.")
+
   with st.expander(
-      "📥 Caricamento e Sincronizzazione File Excel", expanded=True
+      "📥 Caricamento e Sincronizzazione File Excel", expanded=False
   ):
     uploaded_file = st.file_uploader("Carica file Excel (.xlsx)", type=["xlsx"])
     if uploaded_file and st.button("🚀 Importa Liste nel Database Centrale"):
@@ -391,7 +472,110 @@ if st.session_state.role == "ADMIN":
         st.error(f"Errore durante l'importazione: {e}")
 
   st.markdown("---")
-  st.subheader("📊 Report Attività Giornaliera in Tempo Reale")
+  st.subheader(
+      "📈 Controllo Statistiche e Barre Attività per Singolo Operatore"
+  )
+
+  conn = sqlite3.connect(DB_NAME)
+  cursor = conn.cursor()
+  cursor.execute("SELECT username FROM utenti WHERE ruolo = 'OPERATORE'")
+  operatori_disponibili = [r[0] for r in cursor.fetchall()]
+  conn.close()
+
+  if not operatori_disponibili:
+    st.info(
+        "Nessun operatore registrato. Crea prima un account operatore nel pannello"
+        " sopra."
+    )
+  else:
+    selected_op_stat = st.selectbox(
+        "👤 Seleziona Operatore da Monitorare", operatori_disponibili
+    )
+
+    # Calcoli giornalieri e mensili per l'operatore selezionato
+    c_oggi, a_oggi = get_today_stats(selected_op_stat)
+    c_mese, a_mese = get_month_stats(selected_op_stat)
+
+    target_calls_day = 100
+    target_apps_day = 4
+    target_calls_month = 2000
+    target_apps_month = 80
+
+    pct_c_oggi = min(int((c_oggi / target_calls_day) * 100), 100)
+    pct_a_oggi = min(int((a_oggi / target_apps_day) * 100), 100)
+    pct_c_mese = min(int((c_mese / target_calls_month) * 100), 100)
+    pct_a_mese = min(int((a_mese / target_apps_month) * 100), 100)
+
+    st.markdown(
+        f"#### 📅 Statistiche Giornaliere di: `{selected_op_stat}`"
+    )
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+      st.markdown(
+          f"""
+                <div class="energy-container">
+                    <div class="energy-title">
+                        <span>⚡ Chiamate Oggi: <b>{c_oggi} / {target_calls_day}</b></span>
+                        <span>{pct_c_oggi}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill-calls" style="width: {pct_c_oggi}%;"></div>
+                    </div>
+                </div>
+                """,
+          unsafe_allow_html=True,
+      )
+    with col_m2:
+      st.markdown(
+          f"""
+                <div class="energy-container">
+                    <div class="energy-title">
+                        <span>🎯 Appuntamenti Oggi: <b>{a_oggi} / {target_apps_day}</b></span>
+                        <span>{pct_a_oggi}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill-apps" style="width: {pct_a_oggi}%;"></div>
+                    </div>
+                </div>
+                """,
+          unsafe_allow_html=True,
+      )
+
+    st.markdown(f"#### 📆 Statistiche Mensili di: `{selected_op_stat}`")
+    col_m3, col_m4 = st.columns(2)
+    with col_m3:
+      st.markdown(
+          f"""
+                <div class="energy-container">
+                    <div class="energy-title">
+                        <span>⚡ Chiamate Mese: <b>{c_mese} / {target_calls_month}</b></span>
+                        <span>{pct_c_mese}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill-calls" style="width: {pct_c_mese}%;"></div>
+                    </div>
+                </div>
+                """,
+          unsafe_allow_html=True,
+      )
+    with col_m4:
+      st.markdown(
+          f"""
+                <div class="energy-container">
+                    <div class="energy-title">
+                        <span>🎯 Appuntamenti Mese: <b>{a_mese} / {target_apps_month}</b></span>
+                        <span>{pct_a_mese}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill-apps" style="width: {pct_a_mese}%;"></div>
+                    </div>
+                </div>
+                """,
+          unsafe_allow_html=True,
+      )
+
+  st.markdown("---")
+  st.subheader("📊 Report Attività Globale in Tempo Reale")
   conn = sqlite3.connect(DB_NAME)
   df_report = pd.read_sql_query(
       "SELECT operatore, postazione, foglio, esito, COUNT(*) as conteggio FROM"
@@ -413,7 +597,6 @@ else:
       unsafe_allow_html=True,
   )
 
-  # --- BARRE ENERGIA ---
   n_calls_today, n_apps_today = get_today_stats(st.session_state.username)
   target_calls = 100
   target_apps = 4
@@ -454,7 +637,6 @@ else:
         unsafe_allow_html=True,
     )
 
-  # RIEPILOGO MESE
   n_calls_month, n_apps_month = get_month_stats(st.session_state.username)
   st.markdown(
       f"""
@@ -469,8 +651,8 @@ else:
 
   if df_db.empty:
     st.warning(
-        "⚠️ Nessun dato nel database. Accedi come 'Master' (hera2026) e carica"
-        " il file Excel."
+        "⚠️ Nessun dato nel database. Accedi come Master e carica il file"
+        " Excel."
     )
   else:
     records_list = []
@@ -487,18 +669,14 @@ else:
       dati["Operatore Chiamata"] = db_row["operatore"]
       dati["Sede Appuntamento"] = db_row["sede_appuntamento"]
       dati["_nota_db"] = db_row["note"]
-      # Pulizia telefono immediata
       if "Telefono" in dati:
         dati["Telefono"] = pulisci_telefono(dati["Telefono"])
       records_list.append(dati)
 
     df_view = pd.DataFrame(records_list)
 
-    # --- FILTRI DI RICERCA COMUNI COME VERO FILTRO ---
     with st.expander("🔍 Filtri di Ricerca Avanzati", expanded=True):
       col_f1, col_f2, col_f3 = st.columns(3)
-
-      # Estrazione lista comuni unici presenti negli indirizzi
       comuni_disponibili = ["Tutti"]
       if "Indirizzo residenza" in df_view.columns:
         estratti = set()
@@ -512,8 +690,6 @@ else:
               "CASARSA",
               "SAN VITO",
               "MANIAGO",
-              "AVIANO",
-              "VALVASONE",
           ]:
             if c_key in str(ind).upper():
               estratti.add(c_key)
@@ -598,7 +774,6 @@ else:
       cessazione = val_safe("DATA CESSAZIONE / SW OUT", "N/D")
       privacy = val_safe("PRIVACY", "N/D").upper()
 
-      # Controllo se Privacy è NO per generare pop-up giallo temporaneo
       if privacy in ["NO", "N", "FALSE", "0"]:
         st.markdown(
             """
