@@ -4,6 +4,7 @@ import sqlite3
 import numpy as np
 import pandas as pd
 import streamlit as st
+import time
 
 st.set_page_config(
     page_title="Hera Call Center - Multi-Postazione",
@@ -20,10 +21,19 @@ st.markdown(
     .sub-title { font-size: 14px; color: #555555; margin-bottom: 15px; }
     .card-box { background-color: #f8f9fa; border-radius: 12px; padding: 22px; border-left: 8px solid #0056b3; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.06); }
     .warning-box { background-color: #f8d7da; border-radius: 10px; padding: 15px; border-left: 8px solid #dc3545; color: #721c24; margin-bottom: 15px; font-weight: bold; }
+    
+    /* POP-UP GIALLO PRIVACY NO */
+    .privacy-alert-popup { background-color: #fff3cd; border: 2px solid #ffecb5; border-radius: 10px; padding: 15px; color: #664d03; margin-bottom: 15px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); text-align: center; animation: pulse 1s infinite; }
+    
     .phone-highlight { font-size: 34px !important; font-weight: 900 !important; color: #d9534f !important; letter-spacing: 1.5px; margin: 10px 0; }
     .name-highlight { font-size: 28px !important; font-weight: 800 !important; color: #1b1e21 !important; }
     .status-badge-ok { background-color: #d4edda; color: #155724; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
     .status-badge-warn { background-color: #fff3cd; color: #856404; padding: 4px 10px; border-radius: 6px; font-weight: bold; }
+    
+    /* PRIVACY IN EVIDENZA */
+    .privacy-yes { background-color: #d4edda; color: #155724; padding: 6px 12px; border-radius: 6px; font-weight: 900; font-size: 18px; display: inline-block; }
+    .privacy-no { background-color: #f8d7da; color: #721c24; padding: 6px 12px; border-radius: 6px; font-weight: 900; font-size: 18px; display: inline-block; }
+
     .stButton>button { width: 100%; height: 52px; font-size: 16px; font-weight: bold; border-radius: 8px; }
     
     /* STILE WIDGET OBIETTIVI / ENERGIA */
@@ -32,6 +42,8 @@ st.markdown(
     .progress-bar-bg { background-color: #e2e8f0; border-radius: 20px; height: 18px; width: 100%; overflow: hidden; }
     .progress-bar-fill-calls { background: linear-gradient(90deg, #3b82f6, #0056b3); height: 100%; border-radius: 20px; }
     .progress-bar-fill-apps { background: linear-gradient(90deg, #f59e0b, #10b981); height: 100%; border-radius: 20px; }
+    
+    .comuni-counter-box { background: #f1f5f9; border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 12px; border-left: 4px solid #3b82f6; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -139,6 +151,41 @@ def update_call_in_db(
   conn.close()
 
 
+def pulisci_telefono(tel):
+  if pd.isna(tel) or not tel:
+    return "N/D"
+  t_str = str(tel).strip()
+  if t_str.endswith(".0"):
+    t_str = t_str[:-2]
+  return t_str
+
+
+def estrai_comune(indirizzo):
+  if pd.isna(indirizzo) or not indirizzo:
+    return "ALTRO"
+  ind_str = str(indirizzo).upper()
+  # Tenta di estrarre parole chiave tipiche o la citta'
+  # Esempio: VIA ROMA 12, SPILIMBERGO PN -> SPILIMBERGO
+  parti = [p.strip() for p in ind_str.replace(",", " ").split() if len(p) > 2]
+  comuni_noti = [
+      "SPILIMBERGO",
+      "SAN MARTINO",
+      "CODROIPO",
+      "PORDENONE",
+      "ZOPPOLA",
+      "CASARSA",
+      "SAN VITO",
+      "MANIAGO",
+  ]
+  for c in comuni_noti:
+    if c in ind_str:
+      return c
+  # Se contiene un CAP a 5 cifre, prendiamo la parola subito dopo o prima
+  return (
+      parti[-2] if len(parti) >= 2 else "GENERICO"
+  )  # Fallback di raggruppamento
+
+
 if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
 if "username" not in st.session_state:
@@ -188,48 +235,95 @@ if not st.session_state.logged_in:
     st.markdown("</div>", unsafe_allow_html=True)
   st.stop()
 
-# --- BARRA LATERALE (Utente + Utility / Strumenti) ---
+# --- BARRA LATERALE (Utente + Contatore residuo per Comune + Utility) ---
 st.sidebar.title(f"👤 {st.session_state.username}")
 st.sidebar.markdown(f"**Ruolo:** {st.session_state.role}")
 st.sidebar.markdown(f"**Postazione:** {st.session_state.postazione}")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🛠️ Utility Operatore")
+st.sidebar.markdown("### 📊 Da Chiamare per Comune")
 
-# Tool 1: Orologio e Data
+df_full_check = get_all_shared_dataframe()
+if not df_full_check.empty:
+  # Calcola quanti clienti non hanno ancora esito per comune
+  comuni_list = []
+  for _, r in df_full_check.iterrows():
+    try:
+      d = json.loads(r["dati_json"])
+    except:
+      d = {}
+    ind = str(d.get("Indirizzo residenza", ""))
+    # Estrazione Comune pulita
+    comune_trovato = "ALTRO"
+    for c_key in [
+        "SPILIMBERGO",
+        "SAN MARTINO",
+        "CODROIPO",
+        "PORDENONE",
+        "ZOPPOLA",
+        "CASARSA",
+        "SAN VITO",
+        "MANIAGO",
+        "AVIANO",
+        "VALVASONE",
+    ]:
+      if c_key in ind.upper():
+        comune_trovato = c_key
+        break
+    comuni_list.append({
+        "comune": comune_trovato,
+        "esito": r["esito"],
+    })
+
+  df_c_stat = pd.DataFrame(comuni_list)
+  # Filtra solo quelli da chiamare (esito vuoto)
+  df_da_chiamare = df_c_stat[
+      (df_c_stat["esito"] == "") | (df_c_stat["esito"].isna())
+  ]
+
+  if not df_da_chiamare.empty:
+    counts = df_da_chiamare["comune"].value_counts()
+    for com, num in counts.items():
+      st.sidebar.markdown(
+          f"📍 **{com}**: <span style='color: #d9534f; font-weight: bold;'>{num}"
+          " da chiamare</span>",
+          unsafe_allow_html=True,
+      )
+  else:
+    st.sidebar.info("Tutti i contatti sono stati chiamati!")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛠️ Utility Operatore")
 with st.sidebar.expander("🕒 Orologio & Data"):
   st.write(f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y')}")
   st.write(f"⏰ **Ora:** {datetime.now().strftime('%H:%M:%S')}")
-  if st.button("Aggiorna Ora"):
-    st.rerun()
 
-# Tool 2: Calcolatrice Rapida
 with st.sidebar.expander("🧮 Calcolatrice"):
   c_num1 = st.number_input("Numero 1", value=0.0, key="calc_n1")
   c_op = st.selectbox("Operazione", ["+", "-", "×", "÷"], key="calc_op")
   c_num2 = st.number_input("Numero 2", value=0.0, key="calc_n2")
-  if c_op == "+":
-    c_res = c_num1 + c_num2
-  elif c_op == "-":
-    c_res = c_num1 - c_num2
-  elif c_op == "×":
-    c_res = c_num1 * c_num2
-  elif c_op == "÷":
-    c_res = c_num1 / c_num2 if c_num2 != 0 else "Errore (Div/0)"
+  c_res = (
+      c_num1 + c_num2
+      if c_op == "+"
+      else (
+          c_num1 - c_num2
+          if c_op == "-"
+          else (
+              c_num1 * c_num2
+              if c_op == "×"
+              else (c_num1 / c_num2 if c_num2 != 0 else "Errore")
+          )
+      )
+  )
   st.info(f"Risultato: **{c_res}**")
 
-# Tool 3: Verifica Codice Fiscale
 with st.sidebar.expander("🆔 Verifica Codice Fiscale"):
   cf_check = st.text_input("Inserisci CF da verificare", "").upper().strip()
   if cf_check:
     if len(cf_check) == 16:
       st.success("✅ Lunghezza corretta (16 caratteri).")
-      st.write(f"Codice inserito: `{cf_check}`")
     else:
-      st.warning(
-          f"⚠️ Attenzione: il CF inserito ha {len(cf_check)} caratteri (dovrebbe"
-          " esserne 16)."
-      )
+      st.warning(f"⚠️ Lunghezza errata: {len(cf_check)} caratteri (su 16).")
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Esci / Logout"):
@@ -267,10 +361,7 @@ if st.session_state.role == "ADMIN":
                 for k, v in row_dict.items()
             }
 
-            tel = str(row_dict.get("Telefono", "")).strip()
-            if not tel or tel.lower() in ["nan", "n/d", ""]:
-              tel = "N/D"
-
+            tel = pulisci_telefono(row_dict.get("Telefono", ""))
             nome = str(row_dict.get("Cliente", "")).strip()
             if not nome or nome.lower() in ["nan", ""]:
               nome = str(row_dict.get("Referente Titolare", "")).strip()
@@ -295,10 +386,7 @@ if st.session_state.role == "ADMIN":
 
         conn.commit()
         conn.close()
-        st.success(
-            f"✅ Importazione completata! Caricati {count_tot} record unificati"
-            " nel database."
-        )
+        st.success(f"✅ Importazione completata! Caricati {count_tot} record.")
       except Exception as e:
         st.error(f"Errore durante l'importazione: {e}")
 
@@ -311,31 +399,10 @@ if st.session_state.role == "ADMIN":
       conn,
   )
   conn.close()
-
   if not df_report.empty:
     st.dataframe(df_report, use_container_width=True)
   else:
-    st.info("Nessuna chiamata registrata finora dalle postazioni.")
-
-  st.markdown("---")
-  st.subheader("📅 Report Statistiche Mensili per Operatore")
-  conn = sqlite3.connect(DB_NAME)
-  month_prefix = datetime.now().strftime("%Y-%m")
-  df_monthly_report = pd.read_sql_query(
-      f"""
-        SELECT operatore, postazione, esito, COUNT(*) as conteggio 
-        FROM clienti 
-        WHERE esito != '' AND data_ora_esito LIKE '{month_prefix}%'
-        GROUP BY operatore, postazione, esito
-    """,
-      conn,
-  )
-  conn.close()
-
-  if not df_monthly_report.empty:
-    st.dataframe(df_monthly_report, use_container_width=True)
-  else:
-    st.info("Nessuna attività registrata per il mese in corso.")
+    st.info("Nessuna chiamata registrata finora.")
 
 # 3. INTERFACCIA OPERATORE
 else:
@@ -346,7 +413,7 @@ else:
       unsafe_allow_html=True,
   )
 
-  # --- OBIETTIVI GIORNALIERI BARRE ENERGIA ---
+  # --- BARRE ENERGIA ---
   n_calls_today, n_apps_today = get_today_stats(st.session_state.username)
   target_calls = 100
   target_apps = 4
@@ -387,7 +454,7 @@ else:
         unsafe_allow_html=True,
     )
 
-  # --- STATISTICHE MENSILI PERSONALI ---
+  # RIEPILOGO MESE
   n_calls_month, n_apps_month = get_month_stats(st.session_state.username)
   st.markdown(
       f"""
@@ -397,14 +464,13 @@ else:
     """,
       unsafe_allow_html=True,
   )
-  # -------------------------------------------
 
   df_db = get_all_shared_dataframe()
 
   if df_db.empty:
     st.warning(
-        "⚠️ Nessun dato nel database. Accedi come 'Master' (password hera2026)"
-        " e carica il file Excel."
+        "⚠️ Nessun dato nel database. Accedi come 'Master' (hera2026) e carica"
+        " il file Excel."
     )
   else:
     records_list = []
@@ -421,23 +487,38 @@ else:
       dati["Operatore Chiamata"] = db_row["operatore"]
       dati["Sede Appuntamento"] = db_row["sede_appuntamento"]
       dati["_nota_db"] = db_row["note"]
+      # Pulizia telefono immediata
+      if "Telefono" in dati:
+        dati["Telefono"] = pulisci_telefono(dati["Telefono"])
       records_list.append(dati)
 
     df_view = pd.DataFrame(records_list)
 
-    with st.expander("🔍 Filtri di Ricerca Globali", expanded=True):
+    # --- FILTRI DI RICERCA COMUNI COME VERO FILTRO ---
+    with st.expander("🔍 Filtri di Ricerca Avanzati", expanded=True):
       col_f1, col_f2, col_f3 = st.columns(3)
-      col_comune = (
-          "Indirizzo residenza"
-          if "Indirizzo residenza" in df_view.columns
-          else None
-      )
-      opzioni_comune = (
-          ["Tutti"]
-          + sorted(list(df_view[col_comune].dropna().astype(str).unique()))
-          if col_comune
-          else ["Tutti"]
-      )
+
+      # Estrazione lista comuni unici presenti negli indirizzi
+      comuni_disponibili = ["Tutti"]
+      if "Indirizzo residenza" in df_view.columns:
+        estratti = set()
+        for ind in df_view["Indirizzo residenza"].dropna():
+          for c_key in [
+              "SPILIMBERGO",
+              "SAN MARTINO",
+              "CODROIPO",
+              "PORDENONE",
+              "ZOPPOLA",
+              "CASARSA",
+              "SAN VITO",
+              "MANIAGO",
+              "AVIANO",
+              "VALVASONE",
+          ]:
+            if c_key in str(ind).upper():
+              estratti.add(c_key)
+        comuni_disponibili += sorted(list(estratti))
+
       opzioni_esito = [
           "Tutti",
           "Da Chiamare",
@@ -448,17 +529,23 @@ else:
       ]
 
       with col_f1:
-        filtro_comune = st.selectbox("🏘️ Indirizzo / Comune", opzioni_comune)
+        filtro_comune = st.selectbox(
+            "🏘️ Filtra per Comune Esatto", comuni_disponibili
+        )
       with col_f2:
         filtro_esito = st.selectbox("📌 Stato Chiamata", opzioni_esito)
       with col_f3:
         search_text = st.text_input("🔎 Cerca Cliente, CF o Telefono", "")
 
     filtered_df = df_view.copy()
-    if filtro_comune != "Tutti" and col_comune:
+    if filtro_comune != "Tutti":
       filtered_df = filtered_df[
-          filtered_df[col_comune].astype(str) == filtro_comune
+          filtered_df["Indirizzo residenza"]
+          .astype(str)
+          .str.upper()
+          .str.contains(filtro_comune)
       ]
+
     if filtro_esito != "Tutti":
       if filtro_esito == "Da Chiamare":
         filtered_df = filtered_df[
@@ -469,6 +556,7 @@ else:
         filtered_df = filtered_df[
             filtered_df["Esito Chiamata"] == filtro_esito
         ]
+
     if search_text:
       mask = np.column_stack([
           filtered_df[col]
@@ -497,7 +585,7 @@ else:
           return default
         return str(v).strip()
 
-      tel_attuale = val_safe("Telefono", "N/D")
+      tel_attuale = pulisci_telefono(row.get("Telefono", "N/D"))
       nome = val_safe("Cliente", "")
       if nome == "N/D" or not nome:
         nome = val_safe("Referente Titolare", "N/D")
@@ -508,7 +596,18 @@ else:
       luce = val_safe("STATO LUCE", "N/D")
       gas = val_safe("STATO GAS", "N/D")
       cessazione = val_safe("DATA CESSAZIONE / SW OUT", "N/D")
-      privacy = val_safe("PRIVACY", "N/D")
+      privacy = val_safe("PRIVACY", "N/D").upper()
+
+      # Controllo se Privacy è NO per generare pop-up giallo temporaneo
+      if privacy in ["NO", "N", "FALSE", "0"]:
+        st.markdown(
+            """
+                <div class="privacy-alert-popup">
+                    ⚠️ ATTENZIONE: QUESTO CLIENTE HA DATO PRIVACY NO! VERIFICARE IL CONSENSO!
+                </div>
+                """,
+            unsafe_allow_html=True,
+        )
 
       altre_chiamate = []
       if tel_attuale != "N/D" and len(tel_attuale) >= 5:
@@ -541,6 +640,12 @@ else:
             f" {len(filtered_df)}) | Origine: {row.get('_origine_foglio','')}"
         )
 
+        privacy_html = (
+            f'<span class="privacy-no">{privacy}</span>'
+            if privacy in ["NO", "N", "FALSE", "0"]
+            else f'<span class="privacy-yes">{privacy}</span>'
+        )
+
         st.markdown(
             f"""
                 <div class="card-box">
@@ -551,7 +656,7 @@ else:
                     <p><b>🏠 Indirizzo:</b> {indirizzo}</p>
                     <p><b>⚡ Stato Luce:</b> <span class="status-badge-ok">{luce}</span> | <b>🔥 Stato Gas:</b> <span class="status-badge-warn">{gas}</span></p>
                     <p><b>📅 Data Cessazione / SW Out:</b> {cessazione}</p>
-                    <p><b>🔒 Privacy:</b> {privacy}</p>
+                    <p><b>🔒 Privacy:</b> {privacy_html}</p>
                     <hr style="margin: 10px 0;">
                     <p style="font-size:12px; color:#666;">Stato Attuale: <b>{row['Esito Chiamata'] or 'Non ancora chiamato'}</b> {f"(da {row['Operatore Chiamata']} - {row['Postazione Chiamata']})" if row['Operatore Chiamata'] else ''}</p>
                 </div>
