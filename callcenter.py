@@ -1,10 +1,8 @@
 from datetime import datetime
 import json
 import sqlite3
-from bs4 import BeautifulSoup
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 
 st.set_page_config(
@@ -34,9 +32,6 @@ st.markdown(
     .progress-bar-bg { background-color: #e2e8f0; border-radius: 20px; height: 18px; width: 100%; overflow: hidden; }
     .progress-bar-fill-calls { background: linear-gradient(90deg, #3b82f6, #0056b3); height: 100%; border-radius: 20px; }
     .progress-bar-fill-apps { background: linear-gradient(90deg, #f59e0b, #10b981); height: 100%; border-radius: 20px; }
-    
-    /* SIDEBAR WIDGET COMMODITIES */
-    .market-box { background: #f1f5f9; border-radius: 8px; padding: 10px 12px; margin-top: 15px; font-size: 13px; border-left: 4px solid #0f172a; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -144,26 +139,6 @@ def update_call_in_db(
   conn.close()
 
 
-def fetch_live_market_indexes():
-  """Tenta il recupero dei valori aggiornati da web, con fallback intelligente in caso di errore."""
-  try:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
-    }
-    # Esempio di interrogazione o scraping mirato di indicatori energetici pubblici italiani
-    url = "https://www.prezzielucegas.it/"  # o portale di riferimento pubblico
-    response = requests.get(url, headers=headers, timeout=5)
-    if response.status_code == 200:
-      soup = BeautifulSoup(response.text, "html.parser")
-      # Estrazione indicativa o logica personalizzata basata su tag specifici
-      # Se non trova i tag esatti restituisce gli ultimi valori di stima realistici correnti
-    return None, None
-  except Exception:
-    return None, None
-
-
 if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
 if "username" not in st.session_state:
@@ -172,16 +147,6 @@ if "role" not in st.session_state:
   st.session_state.role = ""
 if "postazione" not in st.session_state:
   st.session_state.postazione = "Spilimbergo"
-if "pun_val" not in st.session_state:
-  st.session_state.pun_val = (
-      0.1420  # Valore medio di mercato aggiornato (€/kWh)
-  )
-if "psv_val" not in st.session_state:
-  st.session_state.psv_val = 0.4850  # Valore medio di mercato aggiornato (€/Smc)
-if "last_market_update" not in st.session_state:
-  st.session_state.last_market_update = datetime.now().strftime(
-      "%d/%m/%Y %H:%M"
-  )
 
 # 1. LOGIN SEMPLIFICATO
 if not st.session_state.logged_in:
@@ -223,23 +188,48 @@ if not st.session_state.logged_in:
     st.markdown("</div>", unsafe_allow_html=True)
   st.stop()
 
-# --- BARRA LATERALE COMUNE (Utente + Prezzi Mercato) ---
+# --- BARRA LATERALE (Utente + Utility / Strumenti) ---
 st.sidebar.title(f"👤 {st.session_state.username}")
 st.sidebar.markdown(f"**Ruolo:** {st.session_state.role}")
 st.sidebar.markdown(f"**Postazione:** {st.session_state.postazione}")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📈 Indicatori Mercato Oggi")
-st.sidebar.markdown(
-    f"""
-<div class="market-box">
-    ⚡ <b>PUN (Luce):</b> <code>{st.session_state.pun_val:.4f} €/kWh</code><br>
-    🔥 <b>PSV (Gas):</b> <code>{st.session_state.psv_val:.4f} €/Smc</code><br>
-    <small style="color: #666;">Aggiornato: {st.session_state.last_market_update}</small>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+st.sidebar.markdown("### 🛠️ Utility Operatore")
+
+# Tool 1: Orologio e Data
+with st.sidebar.expander("🕒 Orologio & Data"):
+  st.write(f"📅 **Data:** {datetime.now().strftime('%d/%m/%Y')}")
+  st.write(f"⏰ **Ora:** {datetime.now().strftime('%H:%M:%S')}")
+  if st.button("Aggiorna Ora"):
+    st.rerun()
+
+# Tool 2: Calcolatrice Rapida
+with st.sidebar.expander("🧮 Calcolatrice"):
+  c_num1 = st.number_input("Numero 1", value=0.0, key="calc_n1")
+  c_op = st.selectbox("Operazione", ["+", "-", "×", "÷"], key="calc_op")
+  c_num2 = st.number_input("Numero 2", value=0.0, key="calc_n2")
+  if c_op == "+":
+    c_res = c_num1 + c_num2
+  elif c_op == "-":
+    c_res = c_num1 - c_num2
+  elif c_op == "×":
+    c_res = c_num1 * c_num2
+  elif c_op == "÷":
+    c_res = c_num1 / c_num2 if c_num2 != 0 else "Errore (Div/0)"
+  st.info(f"Risultato: **{c_res}**")
+
+# Tool 3: Verifica Codice Fiscale
+with st.sidebar.expander("🆔 Verifica Codice Fiscale"):
+  cf_check = st.text_input("Inserisci CF da verificare", "").upper().strip()
+  if cf_check:
+    if len(cf_check) == 16:
+      st.success("✅ Lunghezza corretta (16 caratteri).")
+      st.write(f"Codice inserito: `{cf_check}`")
+    else:
+      st.warning(
+          f"⚠️ Attenzione: il CF inserito ha {len(cf_check)} caratteri (dovrebbe"
+          " esserne 16)."
+      )
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🚪 Esci / Logout"):
@@ -255,60 +245,7 @@ if st.session_state.role == "ADMIN":
   )
 
   with st.expander(
-      "🌍 Aggiornamento Automatico o Manuale PUN / PSV", expanded=True
-  ):
-    st.markdown(
-        "Puoi aggiornare i valori di mercato automaticamente interrogando il"
-        " web oppure modificarli manualmente qui sotto."
-    )
-    if st.button("🌐 Cerca e Aggiorna Indici da Google / Web"):
-      with st.spinner(
-          "Connessione ai portali energetici in corso per il recupero dei dati"
-          " aggiornati..."
-      ):
-        # Esegue la ricerca web via script
-        p_web, g_web = fetch_live_market_indexes()
-        if p_web and g_web:
-          st.session_state.pun_val = p_web
-          st.session_state.psv_val = g_web
-        else:
-          # Valore stimato di riscontro aggiornato al mese corrente
-          st.session_state.pun_val = 0.1415
-          st.session_state.psv_val = 0.4790
-        st.session_state.last_market_update = datetime.now().strftime(
-            "%d/%m/%Y %H:%M"
-        )
-      st.success(
-          "✅ Indici di mercato sincronizzati con successo dal web ed"
-          " aggiornati per tutte le sedi!"
-      )
-
-    st.markdown("---")
-    col_m1, col_m2 = st.columns(2)
-    with col_m1:
-      new_pun = st.number_input(
-          "Modifica Manuale PUN (€/kWh)",
-          value=st.session_state.pun_val,
-          format="%.4f",
-          step=0.0001,
-      )
-    with col_m2:
-      new_psv = st.number_input(
-          "Modifica Manuale PSV (€/Smc)",
-          value=st.session_state.psv_val,
-          format="%.4f",
-          step=0.0001,
-      )
-    if st.button("💾 Salva Nuovi Indici Manuali"):
-      st.session_state.pun_val = new_pun
-      st.session_state.psv_val = new_psv
-      st.session_state.last_market_update = datetime.now().strftime(
-          "%d/%m/%Y %H:%M"
-      )
-      st.success("✅ Indici salvati correttamente!")
-
-  with st.expander(
-      "📥 Caricamento e Sincronizzazione File Excel", expanded=False
+      "📥 Caricamento e Sincronizzazione File Excel", expanded=True
   ):
     uploaded_file = st.file_uploader("Carica file Excel (.xlsx)", type=["xlsx"])
     if uploaded_file and st.button("🚀 Importa Liste nel Database Centrale"):
