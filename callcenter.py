@@ -3,28 +3,6 @@ import io
 import json
 import os
 import sqlite3
-import subprocess
-import sys
-
-# --- AUTO-INSTALLAZIONE AUTOMATICA LIBRERIE AL PRIMO AVVIO ---
-REQUIRED_PACKAGES = ["streamlit", "pandas", "openpyxl", "numpy", "reportlab"]
-
-
-def install_missing_packages():
-  for package in REQUIRED_PACKAGES:
-    try:
-      __import__(package)
-    except ImportError:
-      print(
-          f"Libreria mancante rilevata: '{package}'. Installazione in corso..."
-      )
-      subprocess.check_call(
-          [sys.executable, "-m", "pip", "install", package]
-      )
-
-
-install_missing_packages()
-
 import numpy as np
 import pandas as pd
 from reportlab.lib.pagesizes import letter
@@ -58,7 +36,7 @@ st.markdown(
     .privacy-yes { background-color: #d4edda; color: #155724; padding: 6px 12px; border-radius: 6px; font-weight: 900; font-size: 18px; display: inline-block; }
     .privacy-no { background-color: #f8d7da; color: #721c24; padding: 6px 12px; border-radius: 6px; font-weight: 900; font-size: 18px; display: inline-block; }
 
-    .stButton>button { width: 100%; height: 52px; font-size: 16px; font-weight: bold; border-radius: 8px; }
+    .stButton>button { width: 100%; height: 45px; font-size: 15px; font-weight: bold; border-radius: 8px; }
     
     .energy-container { background: white; border-radius: 10px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; border: 1px solid #e2e8f0; }
     .energy-title { font-size: 14px; font-weight: bold; color: #334155; margin-bottom: 6px; display: flex; justify-content: space-between; }
@@ -101,7 +79,6 @@ def init_db():
             postazione TEXT
         )
     """)
-  # Tabella per il cartellino presenze
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS presenze (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,7 +143,6 @@ def get_month_stats(operatore):
 
 
 def calcola_ore_lavorate(username):
-  """Calcola le ore lavorate oggi e nel mese corrente per l'utente"""
   conn = sqlite3.connect(DB_NAME)
   cursor = conn.cursor()
   cursor.execute(
@@ -179,10 +155,8 @@ def calcola_ore_lavorate(username):
 
   ore_oggi = 0.0
   ore_mese = 0.0
-
   today_str = datetime.now().strftime("%Y-%m-%d")
   month_str = datetime.now().strftime("%Y-%m")
-
   ultimo_ingresso = None
 
   for tipo, t_str in timbrature:
@@ -196,15 +170,12 @@ def calcola_ore_lavorate(username):
     elif tipo == "USCITA" and ultimo_ingresso is not None:
       delta = (dt - ultimo_ingresso).total_seconds() / 3600.0
       if delta > 0:
-        t_data_str = dt.strftime("%Y-%m-%d")
-        t_mese_str = dt.strftime("%Y-%m")
-        if t_data_str == today_str:
+        if dt.strftime("%Y-%m-%d") == today_str:
           ore_oggi += delta
-        if t_mese_str == month_str:
+        if dt.strftime("%Y-%m") == month_str:
           ore_mese += delta
       ultimo_ingresso = None
 
-  # Se è rimasto un ingresso aperto oggi senza uscita
   if ultimo_ingresso is not None:
     dt_now = datetime.now()
     if ultimo_ingresso.strftime("%Y-%m-%d") == today_str:
@@ -471,54 +442,94 @@ st.sidebar.title(f"👤 {st.session_state.username}")
 st.sidebar.markdown(f"**Ruolo:** {st.session_state.role}")
 st.sidebar.markdown(f"**Postazione:** {st.session_state.postazione}")
 
-# --- CARTELLINO PRESENZE NELLA BARRA LATERALE ---
-st.sidebar.markdown("---")
-st.sidebar.markdown("### ⏱️ Cartellino Presenze")
-ore_oggi_sidebar, ore_mese_sidebar = calcola_ore_lavorate(
-    st.session_state.username
-)
-st.sidebar.info(
-    f"⏳ **Ore Oggi:** {ore_oggi_sidebar}h\n\n📅 **Ore Mese:**"
-    f" {ore_mese_sidebar}h"
-)
+# SE L'UTENTE È UN OPERATORE, MOSTRARGLI IL CARTELLINO E IL DOWNLOAD NELLA SIDEBAR
+if st.session_state.role == "OPERATORE":
+  st.sidebar.markdown("---")
+  st.sidebar.markdown("### ⏱️ Il tuo Cartellino Presenze")
+  ore_oggi_sidebar, ore_mese_sidebar = calcola_ore_lavorate(
+      st.session_state.username
+  )
+  st.sidebar.info(
+      f"⏳ **Ore Oggi:** {ore_oggi_sidebar}h\n\n📅 **Ore Mese:**"
+      f" {ore_mese_sidebar}h"
+  )
 
-col_s1, col_s2 = st.sidebar.columns(2)
-with col_s1:
-  if st.button("🟢 Entrata"):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO presenze (username, postazione, tipo, timestamp) VALUES"
-        " (?, ?, ?, ?)",
-        (
-            st.session_state.username,
-            st.session_state.postazione,
-            "ENTRATA",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+  col_s1, col_s2 = st.sidebar.columns(2)
+  with col_s1:
+    if st.button("🟢 Entrata"):
+      conn = sqlite3.connect(DB_NAME)
+      cursor = conn.cursor()
+      cursor.execute(
+          "INSERT INTO presenze (username, postazione, tipo, timestamp) VALUES"
+          " (?, ?, ?, ?)",
+          (
+              st.session_state.username,
+              st.session_state.postazione,
+              "ENTRATA",
+              datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          ),
+      )
+      conn.commit()
+      conn.close()
+      st.sidebar.success("Entrata timbrata!")
+      st.rerun()
+  with col_s2:
+    if st.button("🔴 Uscita"):
+      conn = sqlite3.connect(DB_NAME)
+      cursor = conn.cursor()
+      cursor.execute(
+          "INSERT INTO presenze (username, postazione, tipo, timestamp) VALUES"
+          " (?, ?, ?, ?)",
+          (
+              st.session_state.username,
+              st.session_state.postazione,
+              "USCITA",
+              datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          ),
+      )
+      conn.commit()
+      conn.close()
+      st.sidebar.success("Uscita timbrata!")
+      st.rerun()
+
+  st.sidebar.markdown("---")
+  st.sidebar.markdown("### 📥 Scarica i tuoi Risultati")
+  df_all_op = get_all_shared_dataframe()
+  df_miei_lavorati = df_all_op[
+      df_all_op["operatore"] == st.session_state.username
+  ]
+
+  if not df_miei_lavorati.empty:
+    miei_export_list = []
+    for _, r in df_miei_lavorati.iterrows():
+      try:
+        d = json.loads(r["dati_json"])
+      except:
+        d = {}
+      d["Esito Chiamata"] = r["esito"]
+      d["Data Ora Chiamata"] = r["data_ora_esito"]
+      d["Operatore"] = r["operatore"]
+      d["Postazione Sede"] = r["postazione"]
+      d["Sede Appuntamento"] = r["sede_appuntamento"]
+      d["Note Operatore"] = r["note"]
+      miei_export_list.append(d)
+
+    df_miei_final = pd.DataFrame(miei_export_list)
+    output_op = io.BytesIO()
+    with pd.ExcelWriter(output_op, engine="openpyxl") as writer:
+      df_miei_final.to_excel(writer, index=False, sheet_name="MIEI_LAVORATI")
+    excel_data_op = output_op.getvalue()
+
+    st.sidebar.download_button(
+        label=f"📥 Scarica Excel ({len(df_miei_final)} clienti)",
+        data=excel_data_op,
+        file_name=(
+            f"miei_clienti_{st.session_state.username}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         ),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    conn.commit()
-    conn.close()
-    st.sidebar.success("Entrata timbrata!")
-    st.rerun()
-with col_s2:
-  if st.button("🔴 Uscita"):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO presenze (username, postazione, tipo, timestamp) VALUES"
-        " (?, ?, ?, ?)",
-        (
-            st.session_state.username,
-            st.session_state.postazione,
-            "USCITA",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        ),
-    )
-    conn.commit()
-    conn.close()
-    st.sidebar.success("Uscita timbrata!")
-    st.rerun()
+  else:
+    st.sidebar.info("Nessun cliente lavorato.")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📊 Da Chiamare per Comune")
@@ -570,7 +581,8 @@ if st.sidebar.button("🚪 Esci / Logout"):
 # 2. MASTER ACCOUNT
 if st.session_state.role == "ADMIN":
   st.markdown(
-      '<div class="main-title">🛠️ Master Account - Amministrazione & Ore</div>',
+      '<div class="main-title">🛠️ Master Account - Amministrazione &'
+      " Statistiche</div>",
       unsafe_allow_html=True,
   )
 
@@ -636,44 +648,87 @@ if st.session_state.role == "ADMIN":
       else:
         st.warning("⚠️ Le password non coincidono.")
 
-  with st.expander("⏱️ Gestione Presenze e Timbrature (Master)", expanded=True):
-    st.subheader("📊 Riepilogo Ore Lavorate per Dipendente")
+  with st.expander(
+      "📊 Statistiche Dettagliate e Ore Lavorate per Utente", expanded=True
+  ):
+    st.subheader("📋 Tabella Riepilogativa Attività e Ore per Dipendente")
     conn = sqlite3.connect(DB_NAME)
+    df_clienti_all = pd.read_sql_query("SELECT * FROM clienti", conn)
     df_presenze_all = pd.read_sql_query("SELECT * FROM presenze", conn)
     conn.close()
 
-    if not df_presenze_all.empty:
-      # Calcoliamo le ore totali per ogni utente
-      utenti_presenti = df_presenze_all["username"].unique()
-      riepilogo_ore = []
-      for u in utenti_presenti:
-        o_oggi, o_mese = calcola_ore_lavorate(u)
-        riepilogo_ore.append(
-            {"Operatore": u, "Ore Oggi": o_oggi, "Ore Mese In Corso": o_mese}
-        )
-      st.dataframe(pd.DataFrame(riepilogo_ore), use_container_width=True)
+    cursor = sqlite3.connect(DB_NAME).cursor()
+    cursor.execute("SELECT username FROM utenti WHERE ruolo = 'OPERATORE'")
+    lista_ops = [r[0] for r in cursor.fetchall()]
 
-      # Esportazione Excel presenze
+    if lista_ops:
+      report_data = []
+      tot_chiamate_generale = 0
+      tot_ore_generale = 0.0
+
+      for op in lista_ops:
+        # Filtriamo le chiamate di questo operatore
+        df_op_calls = df_clienti_all[df_clienti_all["operatore"] == op]
+        num_chiamate = len(df_op_calls)
+        num_appuntamenti = len(
+            df_op_calls[df_op_calls["esito"] == "Appuntamento Confermato"]
+        )
+        num_non_risp = len(
+            df_op_calls[df_op_calls["esito"] == "Non Risponde / Occupato"]
+        )
+
+        o_oggi, o_mese = calcola_ore_lavorate(op)
+        tot_chiamate_generale += num_chiamate
+        tot_ore_generale += o_mese
+
+        report_data.append({
+            "Operatore": op,
+            "Chiamate Fatte": num_chiamate,
+            "Appuntamenti Presi": num_appuntamenti,
+            "Non Risposto": num_non_risp,
+            "Ore Oggi (h)": o_oggi,
+            "Ore Mese (h)": o_mese,
+        })
+
+      df_report_stat = pd.DataFrame(report_data)
+      st.dataframe(df_report_stat, use_container_width=True)
+
+      st.markdown("---")
+      col_tot1, col_tot2 = st.columns(2)
+      with col_tot1:
+        st.markdown(
+            f"📞 **Totale Generale Chiamate Fatte:**"
+            f" <b>{tot_chiamate_generale}</b>",
+            unsafe_allow_html=True,
+        )
+      with col_tot2:
+        st.markdown(
+            f"⏱️ **Totale Generale Ore Lavorate (Mese):**"
+            f" <b>{round(tot_ore_generale, 2)} h</b>",
+            unsafe_allow_html=True,
+        )
+
+      # Esportazione Excel Completa
       output_p = io.BytesIO()
       with pd.ExcelWriter(output_p, engine="openpyxl") as writer:
-        df_presenze_all.to_excel(
-            writer, index=False, sheet_name="TIMBRATURE"
+        df_report_stat.to_excel(
+            writer, index=False, sheet_name="STATISTICHE_UTENTI"
         )
-        pd.DataFrame(riepilogo_ore).to_excel(
-            writer, index=False, sheet_name="RIEPILOGO_ORE"
+        df_presenze_all.to_excel(
+            writer, index=False, sheet_name="TIMBRATURE_GREZZE"
         )
       excel_p_data = output_p.getvalue()
 
       st.download_button(
-          label="📥 Scarica Excel Timbrature e Ore",
+          label="📥 Scarica Report Completo Timbrature e Statistiche in Excel",
           data=excel_p_data,
-          file_name=f"presenze_ore_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+          file_name=f"report_statistiche_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
     else:
-      st.info("Nessuna timbratura registrata finora.")
+      st.info("Nessun operatore registrato.")
 
-  with st.expander("📥 Caricamento e Esportazione Clienti", expanded=False):
+  with st.expander("📥 Caricamento e Gestione Clienti Excel", expanded=False):
     uploaded_file = st.file_uploader(
         "Carica file Excel (.xlsx) per verifica", type=["xlsx"]
     )
@@ -749,86 +804,45 @@ else:
       unsafe_allow_html=True,
   )
 
-  # VISUALIZZAZIONE ORE LAVORATE SULLA PARTE SINISTRA DELLO SCHERMO
-  ore_oggi_op, ore_mese_op = calcola_ore_lavorate(st.session_state.username)
-  col_h1, col_h2, col_h3 = st.columns([1, 1, 2])
-  with col_h1:
+  # BARRE DEGLI OBIETTIVI (CHIAMATE E APPUNTAMENTI)
+  n_calls_today, n_apps_today = get_today_stats(st.session_state.username)
+  target_calls = 100
+  target_apps = 4
+
+  pct_calls = min(int((n_calls_today / target_calls) * 100), 100)
+  pct_apps = min(int((n_apps_today / target_apps) * 100), 100)
+
+  col_b1, col_b2 = st.columns(2)
+  with col_b1:
     st.markdown(
         f"""
             <div class="energy-container">
                 <div class="energy-title">
-                    <span>⏳ Ore Lavorate Oggi</span>
+                    <span>⚡ Chiamate Oggi: <b>{n_calls_today} / {target_calls}</b></span>
+                    <span>{pct_calls}%</span>
                 </div>
-                <div style="font-size: 24px; font-weight: bold; color: #0056b3; text-align: center;">{ore_oggi_op} h</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill-calls" style="width: {pct_calls}%;"></div>
+                </div>
             </div>
             """,
         unsafe_allow_html=True,
     )
-  with col_h2:
+  with col_b2:
     st.markdown(
         f"""
             <div class="energy-container">
                 <div class="energy-title">
-                    <span>📅 Ore Mese in Corso</span>
+                    <span>🎯 Appuntamenti Oggi: <b>{n_apps_today} / {target_apps}</b></span>
+                    <span>{pct_apps}%</span>
                 </div>
-                <div style="font-size: 24px; font-weight: bold; color: #10b981; text-align: center;">{ore_mese_op} h</div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill-apps" style="width: {pct_apps}%;"></div>
+                </div>
             </div>
             """,
         unsafe_allow_html=True,
     )
-  with col_h3:
-    st.markdown(
-        """
-            <div class="card-box" style="padding: 12px; margin-bottom: 0;">
-                <b>ℹ️ Gestione Cartellino:</b> Ricordati di timbrare l'<b>Entrata</b> quando inizi a lavorare e l'<b>Uscita</b> quando finisci o fai una pausa prolungata. Il conteggio si aggiornerà in tempo reale.
-            </div>
-            """,
-        unsafe_allow_html=True,
-    )
-
-  # SEZIONE DOWNLOAD EXCEL PERSONALE DELL'OPERATORE
-  with st.expander(
-      "📥 Scarica il tuo Report Excel dei Clienti Lavorati", expanded=False
-  ):
-    df_all_op = get_all_shared_dataframe()
-    df_miei_lavorati = df_all_op[
-        df_all_op["operatore"] == st.session_state.username
-    ]
-
-    if not df_miei_lavorati.empty:
-      miei_export_list = []
-      for _, r in df_miei_lavorati.iterrows():
-        try:
-          d = json.loads(r["dati_json"])
-        except:
-          d = {}
-        d["Esito Chiamata"] = r["esito"]
-        d["Data Ora Chiamata"] = r["data_ora_esito"]
-        d["Operatore"] = r["operatore"]
-        d["Postazione Sede"] = r["postazione"]
-        d["Sede Appuntamento"] = r["sede_appuntamento"]
-        d["Note Operatore"] = r["note"]
-        miei_export_list.append(d)
-
-      df_miei_final = pd.DataFrame(miei_export_list)
-      output_op = io.BytesIO()
-      with pd.ExcelWriter(output_op, engine="openpyxl") as writer:
-        df_miei_final.to_excel(writer, index=False, sheet_name="MIEI_LAVORATI")
-      excel_data_op = output_op.getvalue()
-
-      st.download_button(
-          label=(
-              "📥 Scarica Excel con i tuoi"
-              f" {len(df_miei_final)} Clienti Lavorati"
-          ),
-          data=excel_data_op,
-          file_name=(
-              f"miei_clienti_lavorati_{st.session_state.username}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-          ),
-          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      )
-    else:
-      st.info("Non hai ancora registrato esiti o lavorato clienti.")
 
   df_db = get_all_shared_dataframe()
 
