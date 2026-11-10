@@ -10,7 +10,7 @@ from reportlab.pdfgen import canvas
 import streamlit as st
 
 st.set_page_config(
-    page_title="Call Center - Multi-Agenzia & Presenze",
+    page_title="NakaiCall - Multi-Agenzia & Presenze",
     page_icon="📞",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -223,11 +223,6 @@ def pulisci_telefono(tel):
 
 
 def format_dataframe_for_export(df_db):
-  """Formatta il dataframe per l'export Excel:
-
-   - Rimuove la colonna 'foglio'
-   - Mette NOME, CODICE FISCALE e TELEFONO come prime 3 colonne
-  """
   export_list = []
   for _, r in df_db.iterrows():
     try:
@@ -235,28 +230,23 @@ def format_dataframe_for_export(df_db):
     except:
       d = {}
 
-    # Rimuoviamo eventuali chiavi indesiderate
     d.pop("foglio", None)
     d.pop("Foglio", None)
 
-    # Estraiamo i valori puliti standardizzati
     nome = r["nome"]
     cf = r["codice_fiscale"]
     tel = r["telefono"]
 
-    # Ricostruiamo il dizionario ordinato con Nome, Codice Fiscale e Telefono in cima
     new_d = {}
     new_d["NOME"] = nome
     new_d["CODICE FISCALE"] = cf
     new_d["TELEFONO"] = tel
 
-    # Aggiungiamo tutte le altre colonne presenti nel json tranne quelle già messe o 'foglio'
     for k, v in d.items():
       k_upper = str(k).strip().upper()
       if k_upper not in ["NOME", "CLIENTE", "CODICE FISCALE", "TELEFONO", "TEL"]:
         new_d[k] = v
 
-    # Aggiungiamo i dati di esito call center
     new_d["Esito Chiamata"] = r["esito"]
     new_d["Data Ora Chiamata"] = r["data_ora_esito"]
     new_d["Operatore"] = r["operatore"]
@@ -453,8 +443,8 @@ if len(utenti_esistenti) == 0 or st.session_state.force_setup:
 
 if not st.session_state.logged_in:
   st.markdown(
-      "<h2 style='text-align: center; color: #003366;'>📞 Accesso Call Center"
-      " Agenzia</h2>",
+      "<h2 style='text-align: center; color: #003366;'>📞 Accesso NakaiCall"
+      "</h2>",
       unsafe_allow_html=True,
   )
   col1, col2, col3 = st.columns([1, 2, 1])
@@ -688,6 +678,59 @@ if st.session_state.role == "ADMIN":
     df_clienti_all = pd.read_sql_query("SELECT * FROM clienti", conn)
     df_presenze_all = pd.read_sql_query("SELECT * FROM presenze", conn)
     conn.close()
+
+    # CONTATORE CLIENTI RIMANENTI DA CHIAMARE
+    df_rimanenti_master = df_clienti_all[
+        (df_clienti_all["esito"] == "") | (df_clienti_all["esito"].isna())
+    ]
+    tot_rimanenti = len(df_rimanenti_master)
+
+    st.markdown(
+        f"""
+        <div style="background-color: #e0f2fe; padding: 15px; border-radius: 10px; border-left: 6px solid #0284c7; margin-bottom: 20px;">
+            <span style="font-size: 18px; font-weight: bold; color: #0369a1;">📍 Clienti totali rimasti da chiamare: {tot_rimanenti}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Dettaglio per Comune rimanente
+    comuni_rimanenti_list = []
+    for _, r in df_rimanenti_master.iterrows():
+      try:
+        d = json.loads(r["dati_json"])
+      except:
+        d = {}
+      ind = d.get("indirizzo", "")
+      comune_trovato = "ALTRO"
+      for c_key in [
+          "SPILIMBERGO",
+          "SAN MARTINO",
+          "CODROIPO",
+          "PORDENONE",
+          "ZOPPOLA",
+          "CASARSA",
+          "SAN VITO",
+          "MANIAGO",
+          "BRUGNERA",
+          "UDINE",
+          "FANNA",
+      ]:
+        if c_key in str(ind).upper():
+          comune_trovato = c_key
+          break
+      comuni_rimanenti_list.append(comune_trovato)
+
+    if comuni_rimanenti_list:
+      s_comuni = pd.Series(comuni_rimanenti_list).value_counts()
+      cols_comuni = st.columns(min(len(s_comuni), 4))
+      idx_c = 0
+      for com, count in s_comuni.items():
+        with cols_comuni[idx_c % len(cols_comuni)]:
+          st.metric(label=f"Comune: {com}", value=f"{count} rimasti")
+        idx_c += 1
+
+    st.markdown("---")
 
     cursor = sqlite3.connect(DB_NAME).cursor()
     cursor.execute("SELECT username FROM utenti WHERE ruolo = 'OPERATORE'")
