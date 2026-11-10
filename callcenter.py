@@ -222,6 +222,53 @@ def pulisci_telefono(tel):
   return t_str
 
 
+def format_dataframe_for_export(df_db):
+  """Formatta il dataframe per l'export Excel:
+
+   - Rimuove la colonna 'foglio'
+   - Mette NOME, CODICE FISCALE e TELEFONO come prime 3 colonne
+  """
+  export_list = []
+  for _, r in df_db.iterrows():
+    try:
+      d = json.loads(r["dati_json"])
+    except:
+      d = {}
+
+    # Rimuoviamo eventuali chiavi indesiderate
+    d.pop("foglio", None)
+    d.pop("Foglio", None)
+
+    # Estraiamo i valori puliti standardizzati
+    nome = r["nome"]
+    cf = r["codice_fiscale"]
+    tel = r["telefono"]
+
+    # Ricostruiamo il dizionario ordinato con Nome, Codice Fiscale e Telefono in cima
+    new_d = {}
+    new_d["NOME"] = nome
+    new_d["CODICE FISCALE"] = cf
+    new_d["TELEFONO"] = tel
+
+    # Aggiungiamo tutte le altre colonne presenti nel json tranne quelle già messe o 'foglio'
+    for k, v in d.items():
+      k_upper = str(k).strip().upper()
+      if k_upper not in ["NOME", "CLIENTE", "CODICE FISCALE", "TELEFONO", "TEL"]:
+        new_d[k] = v
+
+    # Aggiungiamo i dati di esito call center
+    new_d["Esito Chiamata"] = r["esito"]
+    new_d["Data Ora Chiamata"] = r["data_ora_esito"]
+    new_d["Operatore"] = r["operatore"]
+    new_d["Postazione Sede"] = r["postazione"]
+    new_d["Sede Appuntamento"] = r["sede_appuntamento"]
+    new_d["Note Operatore"] = r["note"]
+
+    export_list.append(new_d)
+
+  return pd.DataFrame(export_list)
+
+
 def estrai_dati_excel_puliti(uploaded_file):
   excel_file = pd.ExcelFile(uploaded_file)
   tutti_i_record = []
@@ -442,7 +489,6 @@ st.sidebar.title(f"👤 {st.session_state.username}")
 st.sidebar.markdown(f"**Ruolo:** {st.session_state.role}")
 st.sidebar.markdown(f"**Postazione:** {st.session_state.postazione}")
 
-# SE L'UTENTE È UN OPERATORE, MOSTRARGLI IL CARTELLINO E IL DOWNLOAD NELLA SIDEBAR
 if st.session_state.role == "OPERATORE":
   st.sidebar.markdown("---")
   st.sidebar.markdown("### ⏱️ Il tuo Cartellino Presenze")
@@ -500,21 +546,7 @@ if st.session_state.role == "OPERATORE":
   ]
 
   if not df_miei_lavorati.empty:
-    miei_export_list = []
-    for _, r in df_miei_lavorati.iterrows():
-      try:
-        d = json.loads(r["dati_json"])
-      except:
-        d = {}
-      d["Esito Chiamata"] = r["esito"]
-      d["Data Ora Chiamata"] = r["data_ora_esito"]
-      d["Operatore"] = r["operatore"]
-      d["Postazione Sede"] = r["postazione"]
-      d["Sede Appuntamento"] = r["sede_appuntamento"]
-      d["Note Operatore"] = r["note"]
-      miei_export_list.append(d)
-
-    df_miei_final = pd.DataFrame(miei_export_list)
+    df_miei_final = format_dataframe_for_export(df_miei_lavorati)
     output_op = io.BytesIO()
     with pd.ExcelWriter(output_op, engine="openpyxl") as writer:
       df_miei_final.to_excel(writer, index=False, sheet_name="MIEI_LAVORATI")
@@ -667,7 +699,6 @@ if st.session_state.role == "ADMIN":
       tot_ore_generale = 0.0
 
       for op in lista_ops:
-        # Filtriamo le chiamate di questo operatore
         df_op_calls = df_clienti_all[df_clienti_all["operatore"] == op]
         num_chiamate = len(df_op_calls)
         num_appuntamenti = len(
@@ -708,7 +739,6 @@ if st.session_state.role == "ADMIN":
             unsafe_allow_html=True,
         )
 
-      # Esportazione Excel Completa
       output_p = io.BytesIO()
       with pd.ExcelWriter(output_p, engine="openpyxl") as writer:
         df_report_stat.to_excel(
@@ -769,21 +799,7 @@ if st.session_state.role == "ADMIN":
     st.subheader("📊 Esporta Tutti i Risultati Clienti in Excel")
     df_export_db = get_all_shared_dataframe()
     if not df_export_db.empty:
-      export_list = []
-      for _, r in df_export_db.iterrows():
-        try:
-          d = json.loads(r["dati_json"])
-        except:
-          d = {}
-        d["Esito Chiamata"] = r["esito"]
-        d["Data Ora Chiamata"] = r["data_ora_esito"]
-        d["Operatore"] = r["operatore"]
-        d["Postazione Sede"] = r["postazione"]
-        d["Sede Appuntamento"] = r["sede_appuntamento"]
-        d["Note Operatore"] = r["note"]
-        export_list.append(d)
-
-      df_export_final = pd.DataFrame(export_list)
+      df_export_final = format_dataframe_for_export(df_export_db)
       output = io.BytesIO()
       with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df_export_final.to_excel(writer, index=False, sheet_name="RISULTATI")
@@ -804,7 +820,6 @@ else:
       unsafe_allow_html=True,
   )
 
-  # BARRE DEGLI OBIETTIVI (CHIAMATE E APPUNTAMENTI)
   n_calls_today, n_apps_today = get_today_stats(st.session_state.username)
   target_calls = 100
   target_apps = 4
