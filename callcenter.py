@@ -2,6 +2,10 @@ from datetime import datetime
 import io
 import json
 import os
+import smtplib
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import sqlite3
 import numpy as np
 import pandas as pd
@@ -49,6 +53,11 @@ st.markdown(
 )
 
 DB_NAME = "hera_shared_calls.db"
+DESTINATARI_EMAIL = [
+    "giulianalavoro1@gmail.com",
+    "fabio.asilo.office@consulenti.gruppohera.it",
+    "nakaisrls@gmail.com",
+]
 
 
 def init_db():
@@ -88,11 +97,68 @@ def init_db():
             timestamp TEXT
         )
     """)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS impostazioni_email (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            smtp_server TEXT,
+            smtp_port INTEGER,
+            sender_email TEXT,
+            sender_pass TEXT
+        )
+    """)
   conn.commit()
   conn.close()
 
 
 init_db()
+
+
+def invia_email_notifica(
+    oggetto, messaggio, attachment_bytes=None, attachment_name=None
+):
+  conn = sqlite3.connect(DB_NAME)
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT smtp_server, smtp_port, sender_email, sender_pass FROM"
+      " impostazioni_email ORDER BY id DESC LIMIT 1"
+  )
+  cfg = cursor.fetchone()
+  conn.close()
+
+  if not cfg:
+    return False, (
+        "Configurazione SMTP non trovata. Inseriscila nella sezione Master."
+    )
+
+  smtp_server, smtp_port, sender_email, sender_pass = cfg
+  if not sender_email or not sender_pass:
+    return False, "Credenziali email mittente non configurate."
+
+  try:
+    msg = MIMEMultipart()
+    msg["From"] = sender_email
+    msg["To"] = ", ".join(DESTINATARI_EMAIL)
+    msg["Subject"] = oggetto
+
+    msg.attach(MIMEText(messaggio, "plain"))
+
+    if attachment_bytes and attachment_name:
+      part = MIMEApplication(
+          attachment_bytes, Name=attachment_name
+      )
+      part[
+          "Content-Disposition"
+      ] = f'attachment; filename="{attachment_name}"'
+      msg.attach(part)
+
+    server = smtplib.SMTP(smtp_server, int(smtp_port))
+    server.starttls()
+    server.login(sender_email, sender_pass)
+    server.sendmail(sender_email, DESTINATARI_EMAIL, msg.as_string())
+    server.quit()
+    return True, "Email inviata con successo!"
+  except Exception as e:
+    return False, f"Errore invio email: {e}"
 
 
 def get_all_shared_dataframe():
@@ -120,26 +186,6 @@ def get_today_stats(operatore):
   appuntamenti_oggi = cursor.fetchone()[0] or 0
   conn.close()
   return chiamate_oggi, appuntamenti_oggi
-
-
-def get_month_stats(operatore):
-  conn = sqlite3.connect(DB_NAME)
-  month_str = datetime.now().strftime("%Y-%m")
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT COUNT(*) FROM clienti WHERE operatore = ? AND data_ora_esito LIKE"
-      " ?",
-      (operatore, f"{month_str}%"),
-  )
-  chiamate_mese = cursor.fetchone()[0] or 0
-  cursor.execute(
-      "SELECT COUNT(*) FROM clienti WHERE operatore = ? AND data_ora_esito LIKE"
-      " ? AND esito = 'Appuntamento Confermato'",
-      (operatore, f"{month_str}%"),
-  )
-  appuntamenti_mese = cursor.fetchone()[0] or 0
-  conn.close()
-  return chiamate_mese, appuntamenti_mese
 
 
 def calcola_ore_lavorate(username):
@@ -210,7 +256,28 @@ def update_call_in_db(
       ),
   )
   conn.commit()
+
+  # Controllo soglia 120 nomi rimanenti per alert email automatico
+  cursor.execute(
+      "SELECT COUNT(*) FROM clienti WHERE esito = '' OR esito IS NULL"
+  )
+  rimanenti = cursor.fetchone()[0] or 0
   conn.close()
+
+  if rimanenti < 120:
+    # Controlliamo se è già stato inviato l'alert oggi per evitare spam
+    today_marker = datetime.now().strftime("%Y-%m-%d")
+    alert_key = f"alert_120_inviato_{today_marker}"
+    if alert_key not in st.session_state:
+      st.session_state[alert_key] = True
+      msg_alert = (
+          f"ATTENZIONE: La lista chiamate di NakaiCall è quasi esaurita!\nRimangono"
+          f" solamente {rimanenti} clienti da chiamare.\nSi prega di caricare"
+          " una nuova lista al più presto."
+      )
+      invia_email_notifica(
+          "🚨 ALERT: Scorta Nomi NakaiCall Sotto i 120!", msg_alert
+      )
 
 
 def pulisci_telefono(tel):
@@ -670,6 +737,85 @@ if st.session_state.role == "ADMIN":
       else:
         st.warning("⚠️ Le password non coincidono.")
 
+  with st.expander("📧 Configurazione e Invio Email Automatiche", expanded=False):
+    st.subheader("⚙️ Configurazione Account SMTP Mittente (es. Gmail)")
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT smtp_server, smtp_port, sender_email, sender_pass FROM"
+        " impostazioni_email ORDER BY id DESC LIMIT 1"
+    )
+    saved_cfg = cursor.fetchone()
+    conn.close()
+
+    s_srv = saved_cfg[0] if saved_cfg else "smtp.gmail.com"
+    s_prt = saved_cfg[1] if saved_cfg else 587
+    s_eml = saved_cfg[2] if saved_cfg else ""
+    s_pss = saved_cfg[3] if saved_cfg else ""
+
+    c_e1, c_e2 = st.columns(2)
+    with c_e1:
+      smtp_server_in = st.text_input("Server SMTP", value=s_srv)
+      smtp_port_in = st.number_input("Porta SMTP", value=int(s_prt))
+    with c_e2:
+      sender_email_in = st.text_input(
+          "Email Mittente (es. tuamail@gmail.com)", value=s_eml
+      )
+      sender_pass_in = st.text_input(
+          "Password per le App Google", type="password", value=s_pss
+      )
+
+    if st.button("💾 Salva Configurazione Email"):
+      conn = sqlite3.connect(DB_NAME)
+      cursor = conn.cursor()
+      cursor.execute(
+          "INSERT INTO impostazioni_email (smtp_server, smtp_port,"
+          " sender_email, sender_pass) VALUES (?, ?, ?, ?)",
+          (
+              smtp_server_in,
+              int(smtp_port_in),
+              sender_email_in.strip(),
+              sender_pass_in.strip(),
+          ),
+      )
+      conn.commit()
+      conn.close()
+      st.success("✅ Configurazione email salvata!")
+
+    st.markdown("---")
+    st.subheader("📤 Invio Manuale Report Globale via Email")
+    st.markdown(
+        "Invio immediato dell'Excel completo a: "
+        + ", ".join(DESTINATARI_EMAIL)
+    )
+    if st.button("📧 Invia Excel Completo via Email a Tutti"):
+      df_glob_mail = get_all_shared_dataframe()
+      if not df_glob_mail.empty:
+        df_glob_mail_fin = format_dataframe_for_export(df_glob_mail)
+        out_mail = io.BytesIO()
+        with pd.ExcelWriter(out_mail, engine="openpyxl") as writer:
+          df_glob_mail_fin.to_excel(
+              writer, index=False, sheet_name="RISULTATI_GLOBALI"
+          )
+        excel_bytes = out_mail.getvalue()
+        file_n = f"risultati_globali_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+
+        successo, msg_esito = invia_email_notifica(
+            "📊 Report Globale Clienti - NakaiCall",
+            (
+                "In allegato il report excel globale aggiornato di tutti i"
+                " clienti gestiti in NakaiCall."
+            ),
+            attachment_bytes=excel_bytes,
+            attachment_name=file_n,
+        )
+        if successo:
+          st.success("✅ " + msg_esito)
+        else:
+          st.error("❌ " + msg_esito)
+      else:
+        st.warning("⚠️ Nessun dato presente nel database.")
+
   with st.expander(
       "📊 Statistiche Dettagliate e Ore Lavorate per Utente", expanded=True
   ):
@@ -839,18 +985,25 @@ if st.session_state.role == "ADMIN":
         st.error(f"❌ Errore: {e}")
 
     st.markdown("---")
-    st.subheader("📊 Esporta Tutti i Risultati Clienti in Excel")
+    st.subheader(
+        "📊 Esporta Tutti i Risultati Clienti in Excel (Formato Globale)"
+    )
     df_export_db = get_all_shared_dataframe()
     if not df_export_db.empty:
       df_export_final = format_dataframe_for_export(df_export_db)
       output = io.BytesIO()
       with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_export_final.to_excel(writer, index=False, sheet_name="RISULTATI")
+        df_export_final.to_excel(
+            writer, index=False, sheet_name="RISULTATI_AGENTI"
+        )
       excel_data = output.getvalue()
       st.download_button(
-          label="📥 Scarica Excel Globale Clienti",
+          label=(
+              "📥 Scarica Excel Globale Agenti (NOME, CODICE FISCALE, TELEFONO"
+              " in cima)"
+          ),
           data=excel_data,
-          file_name=f"report_globale_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+          file_name=f"report_globale_agenti_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       )
 
