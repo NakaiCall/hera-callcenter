@@ -187,6 +187,128 @@ def pulisci_telefono(tel):
   return t_str
 
 
+def trova_valore_intelligente(row_dict, possibili_chiavi):
+  if not isinstance(row_dict, dict):
+    return "N/D"
+  diz_normalizzato = {
+      str(k).strip().upper(): v for k, v in row_dict.items() if k is not None
+  }
+  for chiave in possibili_chiavi:
+    chiave_norm = chiave.strip().upper()
+    if chiave_norm in diz_normalizzato:
+      val = diz_normalizzato[chiave_norm]
+      if not pd.isna(val) and str(val).strip().lower() not in ["nan", "n/d", ""]:
+        return str(val).strip()
+
+  for k, v in diz_normalizzato.items():
+    for chiave in possibili_chiavi:
+      if chiave.strip().upper() in k:
+        if not pd.isna(v) and str(v).strip().lower() not in ["nan", "n/d", ""]:
+          return str(v).strip()
+  return "N/D"
+
+
+def estrai_dati_excel_puliti(uploaded_file):
+  excel_file = pd.ExcelFile(uploaded_file)
+  tutti_i_record = []
+
+  for sheet in excel_file.sheet_names:
+    df_temp = pd.read_excel(uploaded_file, header=None, sheet_name=sheet)
+    header_row = 0
+    for idx, row in df_temp.iterrows():
+      row_str = " ".join([str(v).lower() for v in row.values if pd.notna(v)])
+      matches = sum(
+          1
+          for k in [
+              "telefono",
+              "tel",
+              "cliente",
+              "nominativo",
+              "codice fiscale",
+              "residenza",
+              "esito",
+          ]
+          if k in row_str
+      )
+      if matches >= 2:
+        header_row = idx
+        break
+
+    df_sheet = pd.read_excel(uploaded_file, header=header_row, sheet_name=sheet)
+    df_sheet.columns = [str(c).strip() for c in df_sheet.columns]
+
+    for _, row in df_sheet.iterrows():
+      row_dict = row.to_dict()
+
+      tel_raw = trova_valore_intelligente(
+          row_dict, ["TELEFONO", "TEL", "CELLULARE", "CELL", "RECAPITO"]
+      )
+      tel = pulisci_telefono(tel_raw)
+
+      nome = trova_valore_intelligente(
+          row_dict,
+          [
+              "CLIENTE",
+              "NOMINATIVO",
+              "REFERENTE TITOLARE",
+              "RAGIONE SOCIALE",
+              "NOME",
+              "COGNOME E NOME",
+          ],
+      )
+      if not nome or nome.lower() in ["nan", "n/d", ""]:
+        nome = "Cliente Sconosciuto"
+
+      cf = trova_valore_intelligente(
+          row_dict,
+          ["CODICE FISCALE", "CF", "PARTITA IVA", "P.IVA", "CODICE_FISCALE"],
+      )
+      indirizzo = trova_valore_intelligente(
+          row_dict, ["RESIDENZA", "INDIRIZZO RESIDENZA", "INDIRIZZO", "VIA", "SEDE"]
+      )
+      luce = trova_valore_intelligente(
+          row_dict, ["LUCE", "STATO LUCE", "STATO_LUCE"]
+      )
+      gas = trova_valore_intelligente(row_dict, ["GAS", "STATO GAS", "STATO_GAS"])
+      data_verifica = trova_valore_intelligente(
+          row_dict, ["DATA VERIFICA", "DATA", "DATA_VERIFICA"]
+      )
+      note_det = trova_valore_intelligente(
+          row_dict, ["NOTE DETTAGLIATE", "NOTE", "DETTAGLI", "NOTE_DETTAGLIATE"]
+      )
+      esito_file = trova_valore_intelligente(
+          row_dict, ["ESITO", "STATO FORNITURA", "ESITO_FORNITURA"]
+      )
+      privacy = trova_valore_intelligente(
+          row_dict,
+          [
+              "PRIVACY MARKETING",
+              "PRIVACY",
+              "CONSENSO",
+              "PRIVACY PROFILAZIONE",
+              "TRATTAMENTO DATI",
+          ],
+      )
+
+      # Dizionario pulito e standardizzato pronto per l'operatore
+      record_pulito = {
+          "foglio": sheet,
+          "telefono": tel,
+          "nome": nome,
+          "codice_fiscale": cf,
+          "indirizzo": indirizzo,
+          "luce": luce,
+          "gas": gas,
+          "data_verifica": data_verifica,
+          "note_dettagliate": note_det,
+          "esito_file": esito_file,
+          "privacy": privacy,
+      }
+      tutti_i_record.append(record_pulito)
+
+  return tutti_i_record
+
+
 if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
 if "username" not in st.session_state:
@@ -335,7 +457,7 @@ if not df_full_check.empty:
       d = json.loads(r["dati_json"])
     except:
       d = {}
-    ind = str(d.get("Indirizzo residenza", ""))
+    ind = d.get("indirizzo", "")
     comune_trovato = "ALTRO"
     for c_key in [
         "SPILIMBERGO",
@@ -346,8 +468,11 @@ if not df_full_check.empty:
         "CASARSA",
         "SAN VITO",
         "MANIAGO",
+        "BRUGNERA",
+        "UDINE",
+        "FANNA",
     ]:
-      if c_key in ind.upper():
+      if c_key in str(ind).upper():
         comune_trovato = c_key
         break
     comuni_list.append({"comune": comune_trovato, "esito": r["esito"]})
@@ -419,57 +544,97 @@ if st.session_state.role == "ADMIN":
       else:
         st.warning("⚠️ Compila tutti i campi.")
 
-  with st.expander(
-      "📥 Caricamento e Sincronizzazione File Excel", expanded=False
-  ):
-    uploaded_file = st.file_uploader("Carica file Excel (.xlsx)", type=["xlsx"])
-    if uploaded_file and st.button("🚀 Importa Liste nel Database Centrale"):
-      try:
-        excel_file = pd.ExcelFile(uploaded_file)
+    st.markdown("---")
+    st.subheader("🔑 Modifica Password Account Master")
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+      nuova_pass_master = st.text_input(
+          "Nuova Password Master", type="password", key="new_master_pass"
+      )
+    with col_p2:
+      conferma_pass_master = st.text_input(
+          "Conferma Nuova Password", type="password", key="conf_master_pass"
+      )
+
+    if st.button("🔒 Aggiorna Password Master"):
+      if nuova_pass_master and nuova_pass_master == conferma_pass_master:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM clienti")
-        count_tot = 0
-
-        for sheet in excel_file.sheet_names:
-          df_sheet = pd.read_excel(uploaded_file, header=3, sheet_name=sheet)
-          df_sheet.columns = [str(c).strip() for c in df_sheet.columns]
-
-          for _, row in df_sheet.iterrows():
-            row_dict = row.to_dict()
-            row_dict = {
-                str(k): ("" if pd.isna(v) else str(v))
-                for k, v in row_dict.items()
-            }
-
-            tel = pulisci_telefono(row_dict.get("Telefono", ""))
-            nome = str(row_dict.get("Cliente", "")).strip()
-            if not nome or nome.lower() in ["nan", ""]:
-              nome = str(row_dict.get("Referente Titolare", "")).strip()
-            if not nome or nome.lower() in ["nan", ""]:
-              nome = "Cliente Sconosciuto"
-
-            cf = str(row_dict.get("Codice fiscale", "")).strip()
-            if not cf or cf.lower() in ["nan", ""]:
-              cf = str(row_dict.get("Partita IVA", "")).strip()
-            if not cf or cf.lower() in ["nan", ""]:
-              cf = "N/D"
-
-            dati_str = json.dumps(row_dict, ensure_ascii=False)
-            cursor.execute(
-                """
-                        INSERT INTO clienti (foglio, telefono, nome, codice_fiscale, dati_json, esito)
-                        VALUES (?, ?, ?, ?, ?, '')
-                    """,
-                (sheet, tel, nome, cf, dati_str),
-            )
-            count_tot += 1
-
+        cursor.execute(
+            "UPDATE utenti SET password = ? WHERE username = ?",
+            (nuova_pass_master.strip(), st.session_state.username),
+        )
         conn.commit()
         conn.close()
-        st.success(f"✅ Importazione completata! Caricati {count_tot} record.")
+        st.success("✅ Password Master aggiornata con successo!")
+      else:
+        st.warning(
+            "⚠️ Le password non coincidono o il campo è vuoto."
+        )
+
+  with st.expander(
+      "📥 Caricamento, Controllo e Anteprima File Excel", expanded=True
+  ):
+    uploaded_file = st.file_uploader(
+        "Carica file Excel (.xlsx) per verifica", type=["xlsx"]
+    )
+
+    if uploaded_file is not None:
+      try:
+        preview_records = estrai_dati_excel_puliti(uploaded_file)
+        df_preview = pd.DataFrame(preview_records)
+
+        st.info(
+            f"🔍 **Controllo di Lettura Riuscito!** Trovati"
+            f" **{len(df_preview)}** record. Ecco l'anteprima esatta di ciò"
+            " che vedranno gli operatori:"
+        )
+
+        st.dataframe(
+            df_preview[[
+                "foglio",
+                "nome",
+                "telefono",
+                "codice_fiscale",
+                "indirizzo",
+                "luce",
+                "gas",
+                "data_verifica",
+                "esito_file",
+                "privacy",
+            ]],
+            use_container_width=True,
+        )
+
+        if st.button("🚀 Conferma e Importa nel Database Centrale"):
+          conn = sqlite3.connect(DB_NAME)
+          cursor = conn.cursor()
+          cursor.execute("DELETE FROM clienti")
+
+          for rec in preview_records:
+            cursor.execute(
+                """
+                            INSERT INTO clienti (foglio, telefono, nome, codice_fiscale, dati_json, esito)
+                            VALUES (?, ?, ?, ?, ?, '')
+                        """,
+                (
+                    rec["foglio"],
+                    rec["telefono"],
+                    rec["nome"],
+                    rec["codice_fiscale"],
+                    json.dumps(rec, ensure_ascii=False),
+                ),
+            )
+          conn.commit()
+          conn.close()
+          st.success(
+              f"✅ Importazione completata con successo! Caricati"
+              f" {len(preview_records)} record."
+          )
+          st.rerun()
+
       except Exception as e:
-        st.error(f"Errore durante l'importazione: {e}")
+        st.error(f"❌ Errore durante l'analisi del file Excel: {e}")
 
   st.markdown("---")
   st.subheader(
@@ -492,7 +657,6 @@ if st.session_state.role == "ADMIN":
         "👤 Seleziona Operatore da Monitorare", operatori_disponibili
     )
 
-    # Calcoli giornalieri e mensili per l'operatore selezionato
     c_oggi, a_oggi = get_today_stats(selected_op_stat)
     c_mese, a_mese = get_month_stats(selected_op_stat)
 
@@ -662,15 +826,13 @@ else:
       except:
         dati = {}
       dati["_id_db"] = db_row["id"]
-      dati["_origine_foglio"] = db_row["foglio"]
+      dati["_origine_foglio"] = db_row.get("foglio", "")
       dati["Esito Chiamata"] = db_row["esito"]
       dati["Data Ora Esito"] = db_row["data_ora_esito"]
       dati["Postazione Chiamata"] = db_row["postazione"]
       dati["Operatore Chiamata"] = db_row["operatore"]
       dati["Sede Appuntamento"] = db_row["sede_appuntamento"]
       dati["_nota_db"] = db_row["note"]
-      if "Telefono" in dati:
-        dati["Telefono"] = pulisci_telefono(dati["Telefono"])
       records_list.append(dati)
 
     df_view = pd.DataFrame(records_list)
@@ -678,9 +840,10 @@ else:
     with st.expander("🔍 Filtri di Ricerca Avanzati", expanded=True):
       col_f1, col_f2, col_f3 = st.columns(3)
       comuni_disponibili = ["Tutti"]
-      if "Indirizzo residenza" in df_view.columns:
+
+      if "indirizzo" in df_view.columns:
         estratti = set()
-        for ind in df_view["Indirizzo residenza"].dropna():
+        for ind in df_view["indirizzo"].dropna():
           for c_key in [
               "SPILIMBERGO",
               "SAN MARTINO",
@@ -690,6 +853,9 @@ else:
               "CASARSA",
               "SAN VITO",
               "MANIAGO",
+              "BRUGNERA",
+              "UDINE",
+              "FANNA",
           ]:
             if c_key in str(ind).upper():
               estratti.add(c_key)
@@ -714,9 +880,9 @@ else:
         search_text = st.text_input("🔎 Cerca Cliente, CF o Telefono", "")
 
     filtered_df = df_view.copy()
-    if filtro_comune != "Tutti":
+    if filtro_comune != "Tutti" and "indirizzo" in filtered_df.columns:
       filtered_df = filtered_df[
-          filtered_df["Indirizzo residenza"]
+          filtered_df["indirizzo"]
           .astype(str)
           .str.upper()
           .str.contains(filtro_comune)
@@ -755,26 +921,19 @@ else:
       row = filtered_df.iloc[st.session_state.current_index]
       record_id = row["_id_db"]
 
-      def val_safe(key, default="N/D"):
-        v = row.get(key, default)
-        if pd.isna(v) or str(v).strip().lower() in ["nan", "n/d", ""]:
-          return default
-        return str(v).strip()
+      # Estrazione diretta dai campi puliti salvati nel database
+      tel_attuale = pulisci_telefono(row.get("telefono", "N/D"))
+      nome = row.get("nome", "Cliente Sconosciuto")
+      cf = row.get("codice_fiscale", "N/D")
+      indirizzo = row.get("indirizzo", "N/D")
+      luce = row.get("luce", "N/D")
+      gas = row.get("gas", "N/D")
+      data_ver = row.get("data_verifica", "N/D")
+      note_det = row.get("note_dettagliate", "N/D")
+      esito_file = row.get("esito_file", "N/D")
+      privacy = str(row.get("privacy", "N/D")).upper()
 
-      tel_attuale = pulisci_telefono(row.get("Telefono", "N/D"))
-      nome = val_safe("Cliente", "")
-      if nome == "N/D" or not nome:
-        nome = val_safe("Referente Titolare", "N/D")
-      cf = val_safe("Codice fiscale", "")
-      if cf == "N/D":
-        cf = val_safe("Partita IVA", "N/D")
-      indirizzo = val_safe("Indirizzo residenza", "N/D")
-      luce = val_safe("STATO LUCE", "N/D")
-      gas = val_safe("STATO GAS", "N/D")
-      cessazione = val_safe("DATA CESSAZIONE / SW OUT", "N/D")
-      privacy = val_safe("PRIVACY", "N/D").upper()
-
-      if privacy in ["NO", "N", "FALSE", "0"]:
+      if privacy in ["NO", "N", "FALSE", "0", "NEGATO"]:
         st.markdown(
             """
                 <div class="privacy-alert-popup">
@@ -817,7 +976,7 @@ else:
 
         privacy_html = (
             f'<span class="privacy-no">{privacy}</span>'
-            if privacy in ["NO", "N", "FALSE", "0"]
+            if privacy in ["NO", "N", "FALSE", "0", "NEGATO"]
             else f'<span class="privacy-yes">{privacy}</span>'
         )
 
@@ -828,12 +987,14 @@ else:
                     <div class="phone-highlight">📞 {tel_attuale}</div>
                     <hr style="margin: 10px 0;">
                     <p><b>💳 Codice Fiscale / P.IVA:</b> {cf}</p>
-                    <p><b>🏠 Indirizzo:</b> {indirizzo}</p>
+                    <p><b>🏠 Indirizzo / Residenza:</b> {indirizzo}</p>
                     <p><b>⚡ Stato Luce:</b> <span class="status-badge-ok">{luce}</span> | <b>🔥 Stato Gas:</b> <span class="status-badge-warn">{gas}</span></p>
-                    <p><b>📅 Data Cessazione / SW Out:</b> {cessazione}</p>
-                    <p><b>🔒 Privacy:</b> {privacy_html}</p>
+                    <p><b>📌 Esito Fornitura:</b> {esito_file}</p>
+                    <p><b>📅 Data Verifica:</b> {data_ver}</p>
+                    <p><b>📝 Note Dettagliate:</b> {note_det}</p>
+                    <p><b>🔒 Privacy Marketing:</b> {privacy_html}</p>
                     <hr style="margin: 10px 0;">
-                    <p style="font-size:12px; color:#666;">Stato Attuale: <b>{row['Esito Chiamata'] or 'Non ancora chiamato'}</b> {f"(da {row['Operatore Chiamata']} - {row['Postazione Chiamata']})" if row['Operatore Chiamata'] else ''}</p>
+                    <p style="font-size:12px; color:#666;">Stato Chiamata Call Center: <b>{row['Esito Chiamata'] or 'Non ancora chiamato'}</b> {f"(da {row['Operatore Chiamata']} - {row['Postazione Chiamata']})" if row['Operatore Chiamata'] else ''}</p>
                 </div>
                 """,
             unsafe_allow_html=True,
@@ -850,7 +1011,7 @@ else:
         if pd.isna(nota_attuale) or str(nota_attuale).lower() == "nan":
           nota_attuale = ""
         note_input = st.text_area(
-            "✍️ Note Operatore",
+            "✍️ Note Operatore Call Center",
             value=nota_attuale,
             key=f"note_box_{record_id}",
         )
