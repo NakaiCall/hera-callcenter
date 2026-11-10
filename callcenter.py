@@ -1,4 +1,5 @@
 from datetime import datetime
+import io
 import json
 import os
 import sqlite3
@@ -187,27 +188,6 @@ def pulisci_telefono(tel):
   return t_str
 
 
-def trova_valore_intelligente(row_dict, possibili_chiavi):
-  if not isinstance(row_dict, dict):
-    return "N/D"
-  diz_normalizzato = {
-      str(k).strip().upper(): v for k, v in row_dict.items() if k is not None
-  }
-  for chiave in possibili_chiavi:
-    chiave_norm = chiave.strip().upper()
-    if chiave_norm in diz_normalizzato:
-      val = diz_normalizzato[chiave_norm]
-      if not pd.isna(val) and str(val).strip().lower() not in ["nan", "n/d", ""]:
-        return str(val).strip()
-
-  for k, v in diz_normalizzato.items():
-    for chiave in possibili_chiavi:
-      if chiave.strip().upper() in k:
-        if not pd.isna(v) and str(v).strip().lower() not in ["nan", "n/d", ""]:
-          return str(v).strip()
-  return "N/D"
-
-
 def estrai_dati_excel_puliti(uploaded_file):
   excel_file = pd.ExcelFile(uploaded_file)
   tutti_i_record = []
@@ -240,57 +220,75 @@ def estrai_dati_excel_puliti(uploaded_file):
     for _, row in df_sheet.iterrows():
       row_dict = row.to_dict()
 
-      tel_raw = trova_valore_intelligente(
-          row_dict, ["TELEFONO", "TEL", "CELLULARE", "CELL", "RECAPITO"]
-      )
-      tel = pulisci_telefono(tel_raw)
+      def cerca_val(keys):
+        d_norm = {
+            str(k).strip().upper(): v
+            for k, v in row_dict.items()
+            if k is not None
+        }
+        for k in keys:
+          if k.upper() in d_norm:
+            val = d_norm[k.upper()]
+            if (
+                not pd.isna(val)
+                and str(val).strip().lower() not in ["nan", "n/d", ""]
+            ):
+              return str(val).strip()
+        for k, v in d_norm.items():
+          for key in keys:
+            if key.upper() in k:
+              if (
+                  not pd.isna(v)
+                  and str(v).strip().lower() not in ["nan", "n/d", ""]
+              ):
+                return str(v).strip()
+        return "N/D"
 
-      nome = trova_valore_intelligente(
-          row_dict,
-          [
-              "CLIENTE",
-              "NOMINATIVO",
-              "REFERENTE TITOLARE",
-              "RAGIONE SOCIALE",
-              "NOME",
-              "COGNOME E NOME",
-          ],
-      )
+      tel_raw = cerca_val(["TELEFONO", "TEL", "CELLULARE", "CELL", "RECAPITO"])
+      tel = pulisci_telefono(tel_raw)
+      nome = cerca_val([
+          "CLIENTE",
+          "NOMINATIVO",
+          "REFERENTE TITOLARE",
+          "RAGIONE SOCIALE",
+          "NOME",
+          "COGNOME E NOME",
+      ])
       if not nome or nome.lower() in ["nan", "n/d", ""]:
         nome = "Cliente Sconosciuto"
 
-      cf = trova_valore_intelligente(
-          row_dict,
-          ["CODICE FISCALE", "CF", "PARTITA IVA", "P.IVA", "CODICE_FISCALE"],
-      )
-      indirizzo = trova_valore_intelligente(
-          row_dict, ["RESIDENZA", "INDIRIZZO RESIDENZA", "INDIRIZZO", "VIA", "SEDE"]
-      )
-      luce = trova_valore_intelligente(
-          row_dict, ["LUCE", "STATO LUCE", "STATO_LUCE"]
-      )
-      gas = trova_valore_intelligente(row_dict, ["GAS", "STATO GAS", "STATO_GAS"])
-      data_verifica = trova_valore_intelligente(
-          row_dict, ["DATA VERIFICA", "DATA", "DATA_VERIFICA"]
-      )
-      note_det = trova_valore_intelligente(
-          row_dict, ["NOTE DETTAGLIATE", "NOTE", "DETTAGLI", "NOTE_DETTAGLIATE"]
-      )
-      esito_file = trova_valore_intelligente(
-          row_dict, ["ESITO", "STATO FORNITURA", "ESITO_FORNITURA"]
-      )
-      privacy = trova_valore_intelligente(
-          row_dict,
-          [
-              "PRIVACY MARKETING",
-              "PRIVACY",
-              "CONSENSO",
-              "PRIVACY PROFILAZIONE",
-              "TRATTAMENTO DATI",
-          ],
-      )
+      cf = cerca_val([
+          "CODICE FISCALE",
+          "CF",
+          "PARTITA IVA",
+          "P.IVA",
+          "CODICE_FISCALE",
+      ])
+      indirizzo = cerca_val([
+          "RESIDENZA",
+          "INDIRIZZO RESIDENZA",
+          "INDIRIZZO",
+          "VIA",
+          "SEDE",
+      ])
+      luce = cerca_val(["LUCE", "STATO LUCE", "STATO_LUCE"])
+      gas = cerca_val(["GAS", "STATO GAS", "STATO_GAS"])
+      data_verifica = cerca_val(["DATA VERIFICA", "DATA", "DATA_VERIFICA"])
+      note_det = cerca_val([
+          "NOTE DETTAGLIATE",
+          "NOTE",
+          "DETTAGLI",
+          "NOTE_DETTAGLIATE",
+      ])
+      esito_file = cerca_val(["ESITO", "STATO FORNITURA", "ESITO_FORNITURA"])
+      privacy = cerca_val([
+          "PRIVACY MARKETING",
+          "PRIVACY",
+          "CONSENSO",
+          "PRIVACY PROFILAZIONE",
+          "TRATTAMENTO DATI",
+      ])
 
-      # Dizionario pulito e standardizzato pronto per l'operatore
       record_pulito = {
           "foglio": sheet,
           "telefono": tel,
@@ -320,36 +318,22 @@ if "postazione" not in st.session_state:
 if "force_setup" not in st.session_state:
   st.session_state.force_setup = False
 
-# CONTROLLO UTENTI IN DATABASE
 conn = sqlite3.connect(DB_NAME)
 cursor = conn.cursor()
 cursor.execute("SELECT username FROM utenti")
 utenti_esistenti = [row[0] for row in cursor.fetchall()]
 conn.close()
 
-# SE NON CI SONO UTENTI O SI FORZA LA NUOVA INSTALLAZIONE
 if len(utenti_esistenti) == 0 or st.session_state.force_setup:
   st.markdown(
       "<h1 style='text-align: center; color: #0284c7;'>⚙️ Inizializzazione Nuova"
       " Agenzia</h1>",
       unsafe_allow_html=True,
   )
-  st.markdown(
-      "<p style='text-align: center;'>Configura l'Account Master Amministratore"
-      " per iniziare ad usare la tua piattaforma.</p>",
-      unsafe_allow_html=True,
-  )
-
   col1, col2, col3 = st.columns([1, 2, 1])
   with col2:
     st.markdown('<div class="setup-box">', unsafe_allow_html=True)
-    st.subheader("🔑 Crea il tuo Account Master")
-
-    setup_user = st.text_input(
-        "Username Amministratore / Titolare",
-        value="",
-        placeholder="es. Mario Rossi",
-    )
+    setup_user = st.text_input("Username Amministratore / Titolare", value="")
     setup_pass = st.text_input(
         "Password Master Segreta", type="password", placeholder="Scegli password"
     )
@@ -376,40 +360,25 @@ if len(utenti_esistenti) == 0 or st.session_state.force_setup:
           )
           conn.commit()
           conn.close()
-
           st.session_state.force_setup = False
-          st.success(
-              "✅ Account Master creato con successo! Ora puoi accedere."
-          )
+          st.success("✅ Account Master creato con successo!")
           st.rerun()
         except sqlite3.IntegrityError:
-          st.error("❌ Questo Username è già presente. Scegline un altro.")
-        except Exception as e:
-          st.error(f"Errore: {e}")
+          st.error("❌ Username già esistente.")
       else:
-        st.warning("⚠️ Compila sia Username che Password.")
-
-    if len(utenti_esistenti) > 0:
-      st.markdown("---")
-      if st.button("🔙 Torna al Login"):
-        st.session_state.force_setup = False
-        st.rerun()
-
+        st.warning("⚠️ Compila tutti i campi.")
     st.markdown("</div>", unsafe_allow_html=True)
   st.stop()
 
-# LOGIN NORMALE
 if not st.session_state.logged_in:
   st.markdown(
       "<h2 style='text-align: center; color: #003366;'>📞 Accesso Call Center"
       " Agenzia</h2>",
       unsafe_allow_html=True,
   )
-
   col1, col2, col3 = st.columns([1, 2, 1])
   with col2:
     st.markdown('<div class="card-box">', unsafe_allow_html=True)
-
     selected_user = st.selectbox("👤 Seleziona Utente", utenti_esistenti)
     login_pass = st.text_input("🔑 Inserisci Password", type="password")
 
@@ -423,7 +392,6 @@ if not st.session_state.logged_in:
       )
       res = cursor.fetchone()
       conn.close()
-
       if res:
         st.session_state.logged_in = True
         st.session_state.username = selected_user
@@ -432,14 +400,7 @@ if not st.session_state.logged_in:
         st.rerun()
       else:
         st.error("❌ Password non corretta.")
-
     st.markdown("</div>", unsafe_allow_html=True)
-
-    with st.expander("🆕 Prima volta qui? Configura una Nuova Agenzia"):
-      if st.button("⚙️ Avvia Configurazione Iniziale"):
-        st.session_state.force_setup = True
-        st.rerun()
-
   st.stop()
 
 # --- BARRA LATERALE ---
@@ -502,10 +463,6 @@ if st.session_state.role == "ADMIN":
   )
 
   with st.expander("👥 Gestione Collaboratori & Password", expanded=False):
-    st.markdown(
-        "Crea liberamente i profili degli operatori e assegna username e"
-        " password a tua scelta."
-    )
     col_u1, col_u2, col_u3, col_u4 = st.columns(4)
     with col_u1:
       new_username = st.text_input("Nome Operatore / Username")
@@ -535,27 +492,24 @@ if st.session_state.role == "ADMIN":
           )
           conn.commit()
           conn.close()
-          st.success(
-              f"✅ Operatore **{new_username}** registrato con successo!"
-          )
+          st.success(f"✅ Operatore {new_username} registrato!")
           st.rerun()
         except sqlite3.IntegrityError:
-          st.error("❌ Questo Username è già esistente.")
+          st.error("❌ Username già esistente.")
       else:
         st.warning("⚠️ Compila tutti i campi.")
 
     st.markdown("---")
-    st.subheader("🔑 Modifica Password Account Master")
+    st.subheader("🔑 Modifica Password Master")
     col_p1, col_p2 = st.columns(2)
     with col_p1:
       nuova_pass_master = st.text_input(
-          "Nuova Password Master", type="password", key="new_master_pass"
+          "Nuova Password", type="password", key="new_master_pass"
       )
     with col_p2:
       conferma_pass_master = st.text_input(
-          "Conferma Nuova Password", type="password", key="conf_master_pass"
+          "Conferma Password", type="password", key="conf_master_pass"
       )
-
     if st.button("🔒 Aggiorna Password Master"):
       if nuova_pass_master and nuova_pass_master == conferma_pass_master:
         conn = sqlite3.connect(DB_NAME)
@@ -566,14 +520,12 @@ if st.session_state.role == "ADMIN":
         )
         conn.commit()
         conn.close()
-        st.success("✅ Password Master aggiornata con successo!")
+        st.success("✅ Password aggiornata con successo!")
       else:
-        st.warning(
-            "⚠️ Le password non coincidono o il campo è vuoto."
-        )
+        st.warning("⚠️ Le password non coincidono.")
 
   with st.expander(
-      "📥 Caricamento, Controllo e Anteprima File Excel", expanded=True
+      "📥 Caricamento, Controllo e Esportazione Excel", expanded=True
   ):
     uploaded_file = st.file_uploader(
         "Carica file Excel (.xlsx) per verifica", type=["xlsx"]
@@ -585,11 +537,9 @@ if st.session_state.role == "ADMIN":
         df_preview = pd.DataFrame(preview_records)
 
         st.info(
-            f"🔍 **Controllo di Lettura Riuscito!** Trovati"
-            f" **{len(df_preview)}** record. Ecco l'anteprima esatta di ciò"
-            " che vedranno gli operatori:"
+            f"🔍 **Controllo Riuscito!** Trovati **{len(preview_records)}**"
+            " record."
         )
-
         st.dataframe(
             df_preview[[
                 "foglio",
@@ -599,8 +549,6 @@ if st.session_state.role == "ADMIN":
                 "indirizzo",
                 "luce",
                 "gas",
-                "data_verifica",
-                "esito_file",
                 "privacy",
             ]],
             use_container_width=True,
@@ -610,7 +558,6 @@ if st.session_state.role == "ADMIN":
           conn = sqlite3.connect(DB_NAME)
           cursor = conn.cursor()
           cursor.execute("DELETE FROM clienti")
-
           for rec in preview_records:
             cursor.execute(
                 """
@@ -628,62 +575,70 @@ if st.session_state.role == "ADMIN":
           conn.commit()
           conn.close()
           st.success(
-              f"✅ Importazione completata con successo! Caricati"
-              f" {len(preview_records)} record."
+              f"✅ Importazione completata! Caricati {len(preview_records)}"
+              " record."
           )
           st.rerun()
 
       except Exception as e:
-        st.error(f"❌ Errore durante l'analisi del file Excel: {e}")
+        st.error(f"❌ Errore: {e}")
+
+    st.markdown("---")
+    st.subheader("📊 Esporta Tutti i Risultati in Excel (Master)")
+    df_export_db = get_all_shared_dataframe()
+    if not df_export_db.empty:
+      export_list = []
+      for _, r in df_export_db.iterrows():
+        try:
+          d = json.loads(r["dati_json"])
+        except:
+          d = {}
+        d["Esito Chiamata"] = r["esito"]
+        d["Data Ora Chiamata"] = r["data_ora_esito"]
+        d["Operatore"] = r["operatore"]
+        d["Postazione Sede"] = r["postazione"]
+        d["Sede Appuntamento"] = r["sede_appuntamento"]
+        d["Note Operatore"] = r["note"]
+        export_list.append(d)
+
+      df_export_final = pd.DataFrame(export_list)
+
+      output = io.BytesIO()
+      with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_export_final.to_excel(writer, index=False, sheet_name="RISULTATI")
+      excel_data = output.getvalue()
+
+      st.download_button(
+          label="📥 Scarica Excel Globale con Tutti gli Esiti",
+          data=excel_data,
+          file_name=f"report_globale_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      )
+    else:
+      st.info("Nessun dato nel database da esportare.")
 
   st.markdown("---")
-  st.subheader(
-      "📈 Controllo Statistiche e Barre Attività per Singolo Operatore"
-  )
-
+  st.subheader("📈 Statistiche Operatori e Report Globale")
   conn = sqlite3.connect(DB_NAME)
   cursor = conn.cursor()
   cursor.execute("SELECT username FROM utenti WHERE ruolo = 'OPERATORE'")
   operatori_disponibili = [r[0] for r in cursor.fetchall()]
   conn.close()
 
-  if not operatori_disponibili:
-    st.info(
-        "Nessun operatore registrato. Crea prima un account operatore nel pannello"
-        " sopra."
-    )
-  else:
+  if operatori_disponibili:
     selected_op_stat = st.selectbox(
         "👤 Seleziona Operatore da Monitorare", operatori_disponibili
     )
-
     c_oggi, a_oggi = get_today_stats(selected_op_stat)
     c_mese, a_mese = get_month_stats(selected_op_stat)
 
-    target_calls_day = 100
-    target_apps_day = 4
-    target_calls_month = 2000
-    target_apps_month = 80
-
-    pct_c_oggi = min(int((c_oggi / target_calls_day) * 100), 100)
-    pct_a_oggi = min(int((a_oggi / target_apps_day) * 100), 100)
-    pct_c_mese = min(int((c_mese / target_calls_month) * 100), 100)
-    pct_a_mese = min(int((a_mese / target_apps_month) * 100), 100)
-
-    st.markdown(
-        f"#### 📅 Statistiche Giornaliere di: `{selected_op_stat}`"
-    )
     col_m1, col_m2 = st.columns(2)
     with col_m1:
       st.markdown(
           f"""
                 <div class="energy-container">
                     <div class="energy-title">
-                        <span>⚡ Chiamate Oggi: <b>{c_oggi} / {target_calls_day}</b></span>
-                        <span>{pct_c_oggi}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill-calls" style="width: {pct_c_oggi}%;"></div>
+                        <span>⚡ Chiamate Oggi: <b>{c_oggi} / 100</b></span>
                     </div>
                 </div>
                 """,
@@ -694,63 +649,12 @@ if st.session_state.role == "ADMIN":
           f"""
                 <div class="energy-container">
                     <div class="energy-title">
-                        <span>🎯 Appuntamenti Oggi: <b>{a_oggi} / {target_apps_day}</b></span>
-                        <span>{pct_a_oggi}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill-apps" style="width: {pct_a_oggi}%;"></div>
+                        <span>🎯 Appuntamenti Oggi: <b>{a_oggi} / 4</b></span>
                     </div>
                 </div>
                 """,
           unsafe_allow_html=True,
       )
-
-    st.markdown(f"#### 📆 Statistiche Mensili di: `{selected_op_stat}`")
-    col_m3, col_m4 = st.columns(2)
-    with col_m3:
-      st.markdown(
-          f"""
-                <div class="energy-container">
-                    <div class="energy-title">
-                        <span>⚡ Chiamate Mese: <b>{c_mese} / {target_calls_month}</b></span>
-                        <span>{pct_c_mese}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill-calls" style="width: {pct_c_mese}%;"></div>
-                    </div>
-                </div>
-                """,
-          unsafe_allow_html=True,
-      )
-    with col_m4:
-      st.markdown(
-          f"""
-                <div class="energy-container">
-                    <div class="energy-title">
-                        <span>🎯 Appuntamenti Mese: <b>{a_mese} / {target_apps_month}</b></span>
-                        <span>{pct_a_mese}%</span>
-                    </div>
-                    <div class="progress-bar-bg">
-                        <div class="progress-bar-fill-apps" style="width: {pct_a_mese}%;"></div>
-                    </div>
-                </div>
-                """,
-          unsafe_allow_html=True,
-      )
-
-  st.markdown("---")
-  st.subheader("📊 Report Attività Globale in Tempo Reale")
-  conn = sqlite3.connect(DB_NAME)
-  df_report = pd.read_sql_query(
-      "SELECT operatore, postazione, foglio, esito, COUNT(*) as conteggio FROM"
-      " clienti WHERE esito != '' GROUP BY operatore, postazione, foglio, esito",
-      conn,
-  )
-  conn.close()
-  if not df_report.empty:
-    st.dataframe(df_report, use_container_width=True)
-  else:
-    st.info("Nessuna chiamata registrata finora.")
 
 # 3. INTERFACCIA OPERATORE
 else:
@@ -762,62 +666,82 @@ else:
   )
 
   n_calls_today, n_apps_today = get_today_stats(st.session_state.username)
-  target_calls = 100
-  target_apps = 4
-
-  pct_calls = min(int((n_calls_today / target_calls) * 100), 100)
-  pct_apps = min(int((n_apps_today / target_apps) * 100), 100)
-
   col_b1, col_b2 = st.columns(2)
   with col_b1:
     st.markdown(
         f"""
             <div class="energy-container">
                 <div class="energy-title">
-                    <span>⚡ Chiamate Oggi: <b>{n_calls_today} / {target_calls}</b></span>
-                    <span>{pct_calls}%</span>
-                </div>
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill-calls" style="width: {pct_calls}%;"></div>
+                    <span>⚡ Chiamate Oggi: <b>{n_calls_today} / 100</b></span>
                 </div>
             </div>
             """,
         unsafe_allow_html=True,
     )
-
   with col_b2:
     st.markdown(
         f"""
             <div class="energy-container">
                 <div class="energy-title">
-                    <span>🎯 Appuntamenti Oggi: <b>{n_apps_today} / {target_apps}</b></span>
-                    <span>{pct_apps}%</span>
-                </div>
-                <div class="progress-bar-bg">
-                    <div class="progress-bar-fill-apps" style="width: {pct_apps}%;"></div>
+                    <span>🎯 Appuntamenti Oggi: <b>{n_apps_today} / 4</b></span>
                 </div>
             </div>
             """,
         unsafe_allow_html=True,
     )
 
-  n_calls_month, n_apps_month = get_month_stats(st.session_state.username)
-  st.markdown(
-      f"""
-        <div style="background: #eef2f6; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; font-size: 13px; color: #1e293b;">
-            📅 <b>Il tuo riepilogo del Mese in corso:</b> Chiamate effettuate: <b>{n_calls_month}</b> | Appuntamenti confermati: <b>{n_apps_month}</b>
-        </div>
-    """,
-      unsafe_allow_html=True,
-  )
+  # SEZIONE DOWNLOAD EXCEL PERSONALE DELL'OPERATORE
+  with st.expander(
+      "📥 Scarica il tuo Report Excel dei Clienti Lavorati", expanded=False
+  ):
+    df_all_op = get_all_shared_dataframe()
+    # Filtriamo solo i record lavorati da questo operatore
+    df_miei_lavorati = df_all_op[
+        df_all_op["operatore"] == st.session_state.username
+    ]
+
+    if not df_miei_lavorati.empty:
+      miei_export_list = []
+      for _, r in df_miei_lavorati.iterrows():
+        try:
+          d = json.loads(r["dati_json"])
+        except:
+          d = {}
+        d["Esito Chiamata"] = r["esito"]
+        d["Data Ora Chiamata"] = r["data_ora_esito"]
+        d["Operatore"] = r["operatore"]
+        d["Postazione Sede"] = r["postazione"]
+        d["Sede Appuntamento"] = r["sede_appuntamento"]
+        d["Note Operatore"] = r["note"]
+        miei_export_list.append(d)
+
+      df_miei_final = pd.DataFrame(miei_export_list)
+      output_op = io.BytesIO()
+      with pd.ExcelWriter(output_op, engine="openpyxl") as writer:
+        df_miei_final.to_excel(writer, index=False, sheet_name="MIEI_LAVORATI")
+      excel_data_op = output_op.getvalue()
+
+      st.download_button(
+          label=(
+              "📥 Scarica Excel con i tuoi"
+              f" {len(df_miei_final)} Clienti Lavorati"
+          ),
+          data=excel_data_op,
+          file_name=(
+              f"miei_clienti_lavorati_{st.session_state.username}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+          ),
+          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      )
+    else:
+      st.info(
+          "Non hai ancora registrato esiti o lavorato clienti in questa"
+          " sessione."
+      )
 
   df_db = get_all_shared_dataframe()
 
   if df_db.empty:
-    st.warning(
-        "⚠️ Nessun dato nel database. Accedi come Master e carica il file"
-        " Excel."
-    )
+    st.warning("⚠️ Nessun dato nel database. Contatta il Master.")
   else:
     records_list = []
     for _, db_row in df_db.iterrows():
@@ -826,7 +750,6 @@ else:
       except:
         dati = {}
       dati["_id_db"] = db_row["id"]
-      dati["_origine_foglio"] = db_row.get("foglio", "")
       dati["Esito Chiamata"] = db_row["esito"]
       dati["Data Ora Esito"] = db_row["data_ora_esito"]
       dati["Postazione Chiamata"] = db_row["postazione"]
@@ -840,7 +763,6 @@ else:
     with st.expander("🔍 Filtri di Ricerca Avanzati", expanded=True):
       col_f1, col_f2, col_f3 = st.columns(3)
       comuni_disponibili = ["Tutti"]
-
       if "indirizzo" in df_view.columns:
         estratti = set()
         for ind in df_view["indirizzo"].dropna():
@@ -875,7 +797,9 @@ else:
             "🏘️ Filtra per Comune Esatto", comuni_disponibili
         )
       with col_f2:
-        filtro_esito = st.selectbox("📌 Stato Chiamata", opzioni_esito)
+        filtro_esito = st.selectbox(
+            "📌 Stato Chiamata", opzioni_esito, index=1
+        )  # Default su Da Chiamare
       with col_f3:
         search_text = st.text_input("🔎 Cerca Cliente, CF o Telefono", "")
 
@@ -905,7 +829,7 @@ else:
           .astype(str)
           .str.contains(search_text, case=False, na=False)
           for col in filtered_df.columns
-          if col not in ["_id_db", "_origine_foglio", "_nota_db"]
+          if col not in ["_id_db", "_nota_db"]
       ])
       filtered_df = filtered_df[mask.any(axis=1)]
 
@@ -913,7 +837,10 @@ else:
       st.session_state.current_index = 0
 
     if len(filtered_df) == 0:
-      st.warning("⚠️ Nessun record trovato con i filtri selezionati.")
+      st.warning(
+          "⚠️ Nessun record trovato con questo filtro (prova a selezionare"
+          " 'Tutti' in Stato Chiamata per vedere i clienti già chiamati)."
+      )
     else:
       if st.session_state.current_index >= len(filtered_df):
         st.session_state.current_index = 0
@@ -921,7 +848,6 @@ else:
       row = filtered_df.iloc[st.session_state.current_index]
       record_id = row["_id_db"]
 
-      # Estrazione diretta dai campi puliti salvati nel database
       tel_attuale = pulisci_telefono(row.get("telefono", "N/D"))
       nome = row.get("nome", "Cliente Sconosciuto")
       cf = row.get("codice_fiscale", "N/D")
@@ -971,7 +897,7 @@ else:
 
         st.subheader(
             f"👤 Scheda Cliente ({st.session_state.current_index + 1} di"
-            f" {len(filtered_df)}) | Origine: {row.get('_origine_foglio','')}"
+            f" {len(filtered_df)})"
         )
 
         privacy_html = (
@@ -1006,7 +932,6 @@ else:
             "🏛️ Sede Appuntamento",
             ["Pordenone", "Spilimbergo", "San Martino", "Codroipo"],
         )
-
         nota_attuale = row.get("_nota_db", "")
         if pd.isna(nota_attuale) or str(nota_attuale).lower() == "nan":
           nota_attuale = ""
