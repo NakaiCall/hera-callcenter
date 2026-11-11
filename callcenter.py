@@ -345,7 +345,7 @@ def estrai_dati_excel_puliti(uploaded_file):
             cf = cerca_val(["CODICE FISCALE", "CF", "PARTITA IVA", "P.IVA", "CODICE_FISCALE"])
             indirizzo = cerca_val(["RESIDENZA", "INDIRIZZO RESIDENZA", "INDIRIZZO", "VIA", "SEDE"])
             luce = cerca_val(["LUCE", "STATO LUCE", "STATO_LUCE"])
-            gas = cerca_val(["GAS", "STATO GAS", "STATO_GAS"])
+            gas = crestato = cerca_val(["GAS", "STATO GAS", "STATO_GAS"])
             data_verifica = cerca_val(["DATA VERIFICA", "DATA", "DATA_VERIFICA"])
             note_det = cerca_val(["NOTE DETTAGLIATE", "NOTE", "DETTAGLI", "NOTE_DETTAGLIATE"])
             esito_file = cerca_val(["ESITO", "STATO FORNITURA", "ESITO_FORNITURA"])
@@ -358,7 +358,7 @@ def estrai_dati_excel_puliti(uploaded_file):
                 "codice_fiscale": cf,
                 "indirizzo": indirizzo,
                 "luce": luce,
-                "gas": gas,
+                "gas": crestato,
                 "data_verifica": data_verifica,
                 "note_dettagliate": note_det,
                 "esito_file": esito_file,
@@ -481,12 +481,10 @@ if st.session_state.role == "OPERATORE":
             st.sidebar.success("Uscita timbrata!")
             st.rerun()
 
-    # Scarica report ore personale
     df_miei_orari = get_timbrature_dataframe(st.session_state.username)
     if not df_miei_orari.empty:
         out_ore_op = io.BytesIO()
         with pd.ExcelWriter(out_ore_op, engine="openpyxl") as writer:
-            # Scheda 1: Riepilogo Ore
             df_sum_ore = pd.DataFrame([{"Operatore": st.session_state.username, "Ore Oggi (h)": ore_oggi_sidebar, "Ore Mese (h)": ore_mese_sidebar}])
             df_sum_ore.to_excel(writer, index=False, sheet_name="RIEPILOGO_ORE")
             df_miei_orari.to_excel(writer, index=False, sheet_name="TIMBRATURE")
@@ -502,7 +500,6 @@ if st.session_state.role == "OPERATORE":
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📥 Scarica i tuoi Risultati Chiamate")
     df_all_op = get_all_shared_dataframe()
-    # Filtra solo i clienti assegnati/lavorati dall'operatore corrente (compresi gli scartati)
     df_miei_lavorati = df_all_op[df_all_op["operatore"] == st.session_state.username]
 
     if not df_miei_lavorati.empty:
@@ -746,18 +743,43 @@ if st.session_state.role == "ADMIN":
             with col_tot2:
                 st.markdown(f"⏱️ **Totale Generale Ore Lavorate (Mese):** <b>{round(tot_ore_generale, 2)} h</b>", unsafe_allow_html=True)
 
+            st.markdown("<br>", unsafe_allow_html=True)
+            col_dwn1, col_dwn2 = st.columns(2)
+
+            # Bottone 1: Report Timbrature e Statistiche ore
             output_p = io.BytesIO()
             with pd.ExcelWriter(output_p, engine="openpyxl") as writer:
                 df_report_stat.to_excel(writer, index=False, sheet_name="STATISTICHE_UTENTI")
                 df_presenze_all.to_excel(writer, index=False, sheet_name="TIMBRATURE_GREZZE")
             excel_p_data = output_p.getvalue()
 
-            st.download_button(
-                label="📥 Scarica Report Completo Timbrature e Statistiche in Excel",
-                data=excel_p_data,
-                file_name=f"report_statistiche_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            with col_dwn1:
+                st.download_button(
+                    label="📥 Scarica Report Timbrature e Ore in Excel",
+                    data=excel_p_data,
+                    file_name=f"report_statistiche_ore_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
+            # Bottone 2: Report Globale di TUTTI i risultati chiamate (di tutti gli user)
+            if not df_clienti_all.empty:
+                df_export_final = format_dataframe_for_export(df_clienti_all)
+                output_glob = io.BytesIO()
+                with pd.ExcelWriter(output_glob, engine="openpyxl") as writer:
+                    df_export_final.to_excel(writer, index=False, sheet_name="TUTTI_I_RISULTATI")
+                    df_scartati = df_export_final[df_export_final["Esito Chiamata"] == "Scartato / Fuori Provincia"]
+                    df_scartati.to_excel(writer, index=False, sheet_name="SOLO_SCARTATI")
+                    df_confermati = df_export_final[df_export_final["Esito Chiamata"] == "Appuntamento Confermato"]
+                    df_confermati.to_excel(writer, index=False, sheet_name="APPUNTAMENTI_CONFERMATI")
+                excel_glob_data = output_glob.getvalue()
+
+                with col_dwn2:
+                    st.download_button(
+                        label="📥 Scarica Excel Globale Tutti Risultati Chiamate",
+                        data=excel_glob_data,
+                        file_name=f"report_completo_risultati_chiamate_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
         else:
             st.info("Nessun operatore registrato.")
 
@@ -794,14 +816,9 @@ if st.session_state.role == "ADMIN":
             df_export_final = format_dataframe_for_export(df_export_db)
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                # Foglio 1: Tutti i clienti ed esiti (compresi Scartati e Non Chiamati)
                 df_export_final.to_excel(writer, index=False, sheet_name="TUTTI_I_RISULTATI")
-                
-                # Foglio 2: Solo gli Scartati / Fuori Provincia
                 df_scartati = df_export_final[df_export_final["Esito Chiamata"] == "Scartato / Fuori Provincia"]
                 df_scartati.to_excel(writer, index=False, sheet_name="SOLO_SCARTATI")
-
-                # Foglio 3: Solo Appuntamenti Confermati
                 df_confermati = df_export_final[df_export_final["Esito Chiamata"] == "Appuntamento Confermato"]
                 df_confermati.to_excel(writer, index=False, sheet_name="APPUNTAMENTI_CONFERMATI")
                 
