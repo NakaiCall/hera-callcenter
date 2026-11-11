@@ -345,7 +345,7 @@ def estrai_dati_excel_puliti(uploaded_file):
             cf = cerca_val(["CODICE FISCALE", "CF", "PARTITA IVA", "P.IVA", "CODICE_FISCALE"])
             indirizzo = cerca_val(["RESIDENZA", "INDIRIZZO RESIDENZA", "INDIRIZZO", "VIA", "SEDE"])
             luce = cerca_val(["LUCE", "STATO LUCE", "STATO_LUCE"])
-            gas = crestato = cerca_val(["GAS", "STATO GAS", "STATO_GAS"])
+            gas = cerca_val(["GAS", "STATO GAS", "STATO_GAS"])
             data_verifica = cerca_val(["DATA VERIFICA", "DATA", "DATA_VERIFICA"])
             note_det = cerca_val(["NOTE DETTAGLIATE", "NOTE", "DETTAGLI", "NOTE_DETTAGLIATE"])
             esito_file = cerca_val(["ESITO", "STATO FORNITURA", "ESITO_FORNITURA"])
@@ -358,7 +358,7 @@ def estrai_dati_excel_puliti(uploaded_file):
                 "codice_fiscale": cf,
                 "indirizzo": indirizzo,
                 "luce": luce,
-                "gas": crestato,
+                "gas": gas,
                 "data_verifica": data_verifica,
                 "note_dettagliate": note_det,
                 "esito_file": esito_file,
@@ -678,31 +678,6 @@ if st.session_state.role == "ADMIN":
             unsafe_allow_html=True,
         )
 
-        comuni_rimanenti_list = []
-        for _, r in df_rimanenti_master.iterrows():
-            try:
-                d = json.loads(r["dati_json"])
-            except:
-                d = {}
-            ind = d.get("indirizzo", "")
-            comune_trovato = "ALTRO"
-            for c_key in ["SPILIMBERGO", "SAN MARTINO", "CODROIPO", "PORDENONE", "ZOPPOLA", "CASARSA", "SAN VITO", "MANIAGO", "BRUGNERA", "UDINE", "FANNA"]:
-                if c_key in str(ind).upper():
-                    comune_trovato = c_key
-                    break
-            comuni_rimanenti_list.append(comune_trovato)
-
-        if comuni_rimanenti_list:
-            s_comuni = pd.Series(comuni_rimanenti_list).value_counts()
-            cols_comuni = st.columns(min(len(s_comuni), 4))
-            idx_c = 0
-            for com, count in s_comuni.items():
-                with cols_comuni[idx_c % len(cols_comuni)]:
-                    st.metric(label=f"Comune: {com}", value=f"{count} rimasti")
-                idx_c += 1
-
-        st.markdown("---")
-
         cursor = sqlite3.connect(DB_NAME).cursor()
         cursor.execute("SELECT username FROM utenti WHERE ruolo = 'OPERATORE'")
         lista_ops = [r[0] for r in cursor.fetchall()]
@@ -746,7 +721,6 @@ if st.session_state.role == "ADMIN":
             st.markdown("<br>", unsafe_allow_html=True)
             col_dwn1, col_dwn2 = st.columns(2)
 
-            # Bottone 1: Report Timbrature e Statistiche ore
             output_p = io.BytesIO()
             with pd.ExcelWriter(output_p, engine="openpyxl") as writer:
                 df_report_stat.to_excel(writer, index=False, sheet_name="STATISTICHE_UTENTI")
@@ -761,7 +735,6 @@ if st.session_state.role == "ADMIN":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 
-            # Bottone 2: Report Globale di TUTTI i risultati chiamate (di tutti gli user)
             if not df_clienti_all.empty:
                 df_export_final = format_dataframe_for_export(df_clienti_all)
                 output_glob = io.BytesIO()
@@ -1027,7 +1000,7 @@ else:
                 nota_attuale = row.get("_nota_db", "")
                 if pd.isna(nota_attuale) or str(nota_attuale).lower() == "nan":
                     nota_attuale = ""
-                note_input = st.text_area("✍️ Note Operatore Call Center", value=nota_attuale, key=f"note_box_{record_id}")
+                note_input = st.text_input("✍️ Note Operatore Call Center", value=nota_attuale, key=f"note_box_{record_id}")
 
                 st.markdown("**Registra e passa al successivo:**")
                 b1, b2 = st.columns(2)
