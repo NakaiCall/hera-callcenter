@@ -143,9 +143,7 @@ def invia_email_notifica(
     msg.attach(MIMEText(messaggio, "plain"))
 
     if attachment_bytes and attachment_name:
-      part = MIMEApplication(
-          attachment_bytes, Name=attachment_name
-      )
+      part = MIMEApplication(attachment_bytes, Name=attachment_name)
       part[
           "Content-Disposition"
       ] = f'attachment; filename="{attachment_name}"'
@@ -172,9 +170,10 @@ def get_today_stats(operatore):
   conn = sqlite3.connect(DB_NAME)
   today_str = datetime.now().strftime("%Y-%m-%d")
   cursor = conn.cursor()
+  # Escludiamo gli scartati dal conteggio delle chiamate target giornaliere
   cursor.execute(
       "SELECT COUNT(*) FROM clienti WHERE operatore = ? AND data_ora_esito LIKE"
-      " ?",
+      " ? AND esito != 'Scartato / Fuori Provincia'",
       (operatore, f"{today_str}%"),
   )
   chiamate_oggi = cursor.fetchone()[0] or 0
@@ -257,7 +256,6 @@ def update_call_in_db(
   )
   conn.commit()
 
-  # Controllo soglia 120 nomi rimanenti per alert email automatico
   cursor.execute(
       "SELECT COUNT(*) FROM clienti WHERE esito = '' OR esito IS NULL"
   )
@@ -265,7 +263,6 @@ def update_call_in_db(
   conn.close()
 
   if rimanenti < 120:
-    # Controlliamo se è già stato inviato l'alert oggi per evitare spam
     today_marker = datetime.now().strftime("%Y-%m-%d")
     alert_key = f"alert_120_inviato_{today_marker}"
     if alert_key not in st.session_state:
@@ -825,7 +822,6 @@ if st.session_state.role == "ADMIN":
     df_presenze_all = pd.read_sql_query("SELECT * FROM presenze", conn)
     conn.close()
 
-    # CONTATORE CLIENTI RIMANENTI DA CHIAMARE
     df_rimanenti_master = df_clienti_all[
         (df_clienti_all["esito"] == "") | (df_clienti_all["esito"].isna())
     ]
@@ -840,7 +836,6 @@ if st.session_state.role == "ADMIN":
         unsafe_allow_html=True,
     )
 
-    # Dettaglio per Comune rimanente
     comuni_rimanenti_list = []
     for _, r in df_rimanenti_master.iterrows():
       try:
@@ -889,12 +884,18 @@ if st.session_state.role == "ADMIN":
 
       for op in lista_ops:
         df_op_calls = df_clienti_all[df_clienti_all["operatore"] == op]
-        num_chiamate = len(df_op_calls)
+        # Conta escludendo gli scartati dal volume effettivo di chiamate fatte
+        num_chiamate = len(
+            df_op_calls[df_op_calls["esito"] != "Scartato / Fuori Provincia"]
+        )
         num_appuntamenti = len(
             df_op_calls[df_op_calls["esito"] == "Appuntamento Confermato"]
         )
         num_non_risp = len(
             df_op_calls[df_op_calls["esito"] == "Non Risponde / Occupato"]
+        )
+        num_scartati = len(
+            df_op_calls[df_op_calls["esito"] == "Scartato / Fuori Provincia"]
         )
 
         o_oggi, o_mese = calcola_ore_lavorate(op)
@@ -906,6 +907,7 @@ if st.session_state.role == "ADMIN":
             "Chiamate Fatte": num_chiamate,
             "Appuntamenti Presi": num_appuntamenti,
             "Non Risposto": num_non_risp,
+            "Scartati / Fuori Provincia": num_scartati,
             "Ore Oggi (h)": o_oggi,
             "Ore Mese (h)": o_mese,
         })
@@ -1107,6 +1109,7 @@ else:
           "Non Risponde / Occupato",
           "Rifiutato / Non Interessato",
           "Da Richiamare",
+          "Scartato / Fuori Provincia",
       ]
 
       with col_f1:
@@ -1285,6 +1288,10 @@ else:
           registra_esito("Rifiutato / Non Interessato")
         if b4.button("4️⃣ 🔄 Da Richiamare"):
           registra_esito("Da Richiamare")
+
+        # Nuovo pulsante per scartare senza conteggiarlo nelle chiamate target
+        if st.button("5️⃣ 🚫 Scarta / Fuori Provincia", type="secondary"):
+          registra_esito("Scartato / Fuori Provincia")
 
         st.markdown("---")
         n1, n2 = st.columns(2)
